@@ -124,12 +124,6 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
               {activeTabTitle[activeTab]}
             </h1>
           </div>
-
-          <span style={{
-            fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
-            color: 'var(--secondary)', background: 'rgba(76,215,246,0.12)',
-            border: '1px solid rgba(76,215,246,0.25)', borderRadius: '4px', padding: '2px 6px'
-          }}>PRO</span>
         </header>
 
         <SidePanel
