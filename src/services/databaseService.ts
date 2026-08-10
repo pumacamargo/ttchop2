@@ -11,7 +11,8 @@ import {
   getDoc,
   deleteDoc,
   writeBatch,
-  arrayRemove
+  arrayRemove,
+  arrayUnion
 } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
 import type { ParsedAnalyticsOrder } from './analyticsImport';
@@ -200,6 +201,71 @@ export interface AnalyticsOrder extends ParsedAnalyticsOrder {
   id: string; // same as compositeKey — `${orderId}_${skuId}`
   userId: string;
   importedAt: string;
+}
+
+// ── Brand Concept (Phase 3) ─────────────────────────────────────────────────
+// One doc per user at brand_concepts/{userId}: the channel's art direction —
+// what it's about, its niche/style, brand colors, fonts, and a moodboard of
+// reference images. Read/written directly by BrandConceptView.
+export interface BrandFont {
+  name: string;
+  url?: string;
+  storagePath?: string;
+}
+
+export interface BrandConcept {
+  description: string;
+  niche: string;
+  style: string;
+  colors: string[];
+  fonts: BrandFont[];
+  imageUrls: string[];
+  updatedAt: string; // ISO
+}
+
+// ── Reports (Phase 3) ────────────────────────────────────────────────────────
+// Client-side contract for the (not-yet-implemented) POST /reports/generate
+// endpoint — see PENDIENTES-SERVIDOR.md for the full spec the server must
+// satisfy. The LLM reads a summary of the user's strategy, brand concept,
+// aggregated sales, and renders, and writes back a markdown report.
+export interface ReportOrderSummary {
+  contentId: string;
+  gmv: number;
+  revenue: number;
+  itemsSold: number;
+  productId: string;
+  productName: string;
+  contentType: string;
+  orderType: string;
+  settled: boolean;
+  orderDate: string | null;
+}
+
+export interface ReportRenderInfo {
+  id: string;
+  productId: string;
+  productName: string;
+  type: string;
+  tiktokVideoId?: string;
+  scriptTemplateId?: string;
+  voiceTemplateId?: string;
+  aiTemplateId?: string;
+  language?: string;
+  createdAt: string;
+}
+
+export interface GenerateReportRequest {
+  strategy: string;
+  brandConcept: { description: string; niche: string; style: string } | null;
+  orders: ReportOrderSummary[];
+  renders: ReportRenderInfo[];
+  language: string;
+}
+
+export interface ReportHistoryEntry {
+  id: string;
+  generatedAt: string;
+  report: string;
 }
 
 export interface VideoVariation {
@@ -3270,6 +3336,117 @@ class DatabaseService {
     }
 
     return { newCount, updatedCount };
+  }
+
+  // ── Brand Concept ─────────────────────────────────────────────────────────
+
+  async getBrandConcept(): Promise<BrandConcept | null> {
+    const user = auth.currentUser;
+    if (!user) return null;
+    const snap = await getDoc(doc(firestore, 'brand_concepts', user.uid));
+    return snap.exists() ? (snap.data() as BrandConcept) : null;
+  }
+
+  async saveBrandConcept(data: { description: string; niche: string; style: string; colors: string[] }): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    // merge: true so this text/color save never clobbers fonts/imageUrls managed by the upload methods below
+    await setDoc(doc(firestore, 'brand_concepts', user.uid), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
+  }
+
+  async uploadBrandImage(file: File): Promise<string> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const path = `users/${user.uid}/brand/images/${Date.now()}_${file.name}`;
+    const fileRef = ref(storage, path);
+    await uploadBytes(fileRef, file);
+    const url = await getDownloadURL(fileRef);
+    await setDoc(doc(firestore, 'brand_concepts', user.uid), { imageUrls: arrayUnion(url), updatedAt: new Date().toISOString() }, { merge: true });
+    return url;
+  }
+
+  async deleteBrandImage(url: string): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    try {
+      // ref() accepts an https download URL directly, resolving to the same Storage object
+      await deleteObject(ref(storage, url));
+    } catch (err) {
+      console.error(err); // object may already be gone from Storage; still detach it from Firestore below
+    }
+    await updateDoc(doc(firestore, 'brand_concepts', user.uid), { imageUrls: arrayRemove(url), updatedAt: new Date().toISOString() });
+  }
+
+  async uploadBrandFont(file: File): Promise<BrandFont> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const path = `users/${user.uid}/brand/fonts/${Date.now()}_${file.name}`;
+    const fileRef = ref(storage, path);
+    await uploadBytes(fileRef, file);
+    const url = await getDownloadURL(fileRef);
+    const font: BrandFont = { name: file.name, url, storagePath: path };
+    await setDoc(doc(firestore, 'brand_concepts', user.uid), { fonts: arrayUnion(font), updatedAt: new Date().toISOString() }, { merge: true });
+    return font;
+  }
+
+  async deleteBrandFont(font: BrandFont): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    if (font.storagePath) {
+      try {
+        await deleteObject(ref(storage, font.storagePath));
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    await updateDoc(doc(firestore, 'brand_concepts', user.uid), { fonts: arrayRemove(font), updatedAt: new Date().toISOString() });
+  }
+
+  // ── Reports ────────────────────────────────────────────────────────────────
+  // The /reports/generate endpoint doesn't exist on the server yet — see
+  // PENDIENTES-SERVIDOR.md. Throws on network failure, non-OK response, or an
+  // unexpected JSON shape; the caller (ReportsView) shows one friendly
+  // "not available yet" message with retry for any failure mode.
+
+  async generateReport(payload: GenerateReportRequest): Promise<string> {
+    const webhookUrl = resolveWebhookUrl('ttchop_reports_generate', '/reports/generate');
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(`Reports endpoint responded with status ${response.status}`);
+    }
+    const data: unknown = await response.json();
+    if (!data || typeof data !== 'object' || typeof (data as Record<string, unknown>).report !== 'string') {
+      throw new Error('Unexpected /reports/generate response shape');
+    }
+    return (data as { report: string }).report;
+  }
+
+  async getReportHistory(): Promise<ReportHistoryEntry[]> {
+    const user = auth.currentUser;
+    if (!user) return [];
+    const snap = await getDocs(collection(firestore, 'reports', user.uid, 'history'));
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as ReportHistoryEntry))
+      .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+  }
+
+  async saveReportToHistory(report: string): Promise<ReportHistoryEntry> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const id = `report_${Date.now()}`;
+    const generatedAt = new Date().toISOString();
+    await setDoc(doc(firestore, 'reports', user.uid, 'history', id), { generatedAt, report });
+    return { id, generatedAt, report };
+  }
+
+  async deleteReportFromHistory(id: string): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    await deleteDoc(doc(firestore, 'reports', user.uid, 'history', id));
   }
 }
 

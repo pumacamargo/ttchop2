@@ -92,3 +92,93 @@ calendar_strategy/{userId}
 ```
 
 Un documento por usuario. Reglas en `firestore.rules`: solo el propio usuario puede leer/escribir su documento (mismo patrón que `user_prefs`).
+
+---
+
+## `POST /reports/generate` (Phase 3 — Reports)
+
+### Estado actual
+El endpoint **no existe todavía**. El cliente (`src/services/databaseService.ts`, método `generateReport()`, y `src/components/ReportsView.tsx`) ya hace el `fetch` correspondiente, valida la forma de la respuesta, y maneja cualquier fallo (404, error de red, JSON con forma inesperada) mostrando un mensaje de "no se pudo generar el reporte" con botón de reintentar — no hay ningún crash del lado del cliente mientras este endpoint no exista.
+
+La URL completa se resuelve con `resolveWebhookUrl('ttchop_reports_generate', '/reports/generate')` en `databaseService.ts`, es decir: `{TTCHOP_SERVER_URL}/reports/generate` (hoy `TTCHOP_SERVER_URL = 'https://ttchop-server.lemonsushi.com'`).
+
+### Qué debe hacer
+Recibe la estrategia de contenido del usuario, su concepto de marca (si existe), un resumen de sus ventas recientes y sus renders (videos generados/publicados con su metadata de TTChop). Debe usar un LLM para redactar un **reporte en markdown** que le diga al usuario, en el idioma pedido: qué está funcionando (qué tipo de contenido/producto/plantilla genera más GMV o revenue), qué no, y 2-4 recomendaciones concretas y accionables para su próxima tanda de videos. El endpoint es de **solo lectura/análisis** — nunca debe escribir nada en Firestore; el cliente es quien guarda el reporte devuelto en su historial.
+
+### Request
+
+```
+POST {TTCHOP_SERVER_URL}/reports/generate
+Content-Type: application/json
+```
+
+```ts
+{
+  strategy: string;          // texto libre de calendar_strategy — puede venir vacío si el usuario no lo ha llenado
+  brandConcept: {            // de brand_concepts, o null si el usuario no tiene uno guardado
+    description: string;
+    niche: string;
+    style: string;
+  } | null;
+  orders: {                  // resumen agregado de analytics_orders — NUNCA las filas crudas
+    contentId: string;       // id del video/showcase de TikTok
+    gmv: number;
+    revenue: number;         // solo la parte de gmv ya "Settled"
+    itemsSold: number;
+    productId: string;
+    productName: string;
+    contentType: string;     // "Video" | "Showcase"
+    orderType: string;       // "Shop ads order" | "Affiliate order"
+    settled: boolean;
+    orderDate: string | null; // ISO — si venían varias órdenes agrupadas bajo el mismo contentId, es la más reciente
+  }[];
+  renders: {                 // renders con su metadata de TTChop (plantilla, voz, idioma) — todos los del usuario, sin límite de fecha
+    id: string;
+    productId: string;
+    productName: string;
+    type: string;             // "ai" | "collage" | "overlay" | "collage+overlay"
+    tiktokVideoId?: string;   // si el usuario ya publicó y vinculó este render, coincide con `orders[].contentId`
+    scriptTemplateId?: string;
+    voiceTemplateId?: string;
+    aiTemplateId?: string;
+    language?: string;
+    createdAt: string;        // ISO
+  }[];
+  language: string;          // idioma en el que debe responder el reporte, ej. "English" | "Spanish (Mexico)" | "Japanese"
+}
+```
+
+**Sobre el volumen de `orders`**: el cliente ya limita esto antes de enviarlo — solo manda órdenes de los últimos 90 días, y si aun así son muchas (más de 250 líneas), las agrupa por `contentId` sumando `gmv`/`revenue`/`itemsSold` antes de mandarlas. El servidor puede asumir que `orders` nunca va a traer miles de filas crudas por request.
+
+### Response esperado (HTTP 200)
+
+```ts
+{
+  report: string;   // el reporte completo en Markdown (encabezados, listas, negritas), en el idioma de `language`
+}
+```
+
+El cliente renderiza este markdown con un parser mínimo propio (sin librería, sin `dangerouslySetInnerHTML`) que soporta encabezados, listas y **negritas** — evita sintaxis markdown más exótica (tablas, código, links) porque el cliente no la renderiza.
+
+### Qué debe hacer el LLM al redactar el reporte
+1. Cruzar `orders` (por `contentId`) con `renders` (por `tiktokVideoId`) para saber qué plantilla/voz/idioma/tipo de render generó cada resultado de ventas.
+2. Identificar qué combinaciones (tipo de contenido, plantilla, producto, idioma) tienen mejor GMV/revenue por video, y cuáles tienen renders publicados sin ninguna venta asociada.
+3. Si `brandConcept` viene con datos, usarlo como contexto de tono/estilo al redactar (no evaluar si el contenido "respeta la marca", solo usarlo como marco).
+4. Si `strategy` viene con texto, comentar si las ventas recientes respaldan o contradicen esa estrategia.
+5. Si `orders` viene vacío pero `renders` no, enfocar el reporte en actividad de creación (cadencia, variedad) en vez de ventas.
+6. Cerrar con 2-4 recomendaciones concretas y accionables para la siguiente tanda de contenido.
+7. Responder siempre en el idioma indicado por `language`, y devolver siempre `{ report: string }` — si la respuesta no tiene esa forma exacta, el cliente la descarta como "función no disponible" sin mostrar nada roto.
+
+---
+
+## Firestore: colección nueva `reports/{userId}/history/{reportId}`
+
+No requiere cambios en `ttchop-server` — es leída/escrita directo por el cliente vía Firestore SDK — pero se documenta aquí para contexto:
+
+```
+reports/{userId}/history/{reportId}
+  ├── generatedAt: string  // ISO timestamp
+  └── report: string       // el markdown devuelto por /reports/generate
+```
+
+Reglas en `firestore.rules`: mismo patrón que `analytics_orders` (path-scoped por `userId`, sin chequear `resource.data.userId`).

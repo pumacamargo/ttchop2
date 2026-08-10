@@ -66,6 +66,19 @@ service cloud.firestore {
       allow update: if request.auth != null && request.auth.uid == resource.data.userId;
     }
 
+    // Brand Concept — one doc per user with the channel's art direction
+    // (description, niche, style, colors, fonts, moodboard images).
+    match /brand_concepts/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Reports: LLM-generated performance reports — one doc per report under
+    // a per-user history subcollection, path-scoped by userId like
+    // analytics_orders (no resource.data.userId to check on create).
+    match /reports/{userId}/history/{reportId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
     // Deny all other access
     match /{document=**} {
       allow read, write: if false;
