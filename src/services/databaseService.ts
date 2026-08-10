@@ -40,6 +40,8 @@ export interface Product {
   customBaseVideoUrls?: string[];
   region?: string; // codigo de pais de origen del producto (ej. 'jp', 'mx'), lo llena la extension al importar
   sourceId?: string; // id del producto de TikTok Shop, usado por la extension para no duplicar al re-scrapear
+  scrapedAt?: string; // ISO — cuándo la extension scrapeó este producto por última vez
+  sourceUrl?: string; // URL de TikTok Shop de donde se scrapeó
   updatedAt?: string;
   createdAt: string;
 }
@@ -2082,11 +2084,12 @@ FINAL WRITING RULES
 
 // Documentos guardados en Firestore antes de la migración a `videos[]` todavía tienen el
 // campo viejo `bRolls[]` (sin section/source/trim). Se normalizan al leerlos para no romper la UI.
+//
+// IMPORTANTE: el backfill de scrapedAt/sourceUrl (más abajo) corre para TODOS los documentos,
+// migrados y legacy — por eso ya no hay un early-return aquí. Un early-return dejaría a los
+// documentos migrados (la mayoría en producción) sin pasar por el backfill.
 function normalizeProduct(raw: any): Product {
-  if (raw.videos) return raw as Product;
-
-  const legacyBRolls = raw.bRolls || [];
-  const videos: ProductVideo[] = legacyBRolls.map((b: any) => ({
+  const videos: ProductVideo[] = raw.videos ?? (raw.bRolls || []).map((b: any) => ({
     id: b.id,
     name: b.name,
     downloadUrl: b.downloadUrl,
@@ -2099,7 +2102,22 @@ function normalizeProduct(raw: any): Product {
     createdAt: b.createdAt
   }));
 
-  return { ...raw, videos } as Product;
+  // Backfill scrapedAt: ~70 productos en producción no lo tienen. Si se deja vacío, TODOS
+  // mostrarían la alerta de "re-scrapear" al mismo tiempo (ruido inútil) — usamos la fecha de
+  // creación/actualización como el mejor proxy disponible de cuándo se scrapeó.
+  const scrapedAt: string | undefined = raw.scrapedAt ?? raw.updatedAt ?? raw.createdAt;
+
+  // Backfill sourceUrl: se puede derivar de region + sourceId si el documento no lo trae.
+  const sourceUrl: string | undefined = raw.sourceUrl ?? (
+    raw.region && raw.sourceId ? `https://shop.tiktok.com/${raw.region}/pdp/${raw.sourceId}` : undefined
+  );
+
+  return {
+    ...raw,
+    videos,
+    ...(scrapedAt !== undefined && { scrapedAt }),
+    ...(sourceUrl !== undefined && { sourceUrl }),
+  } as Product;
 }
 
 // Old types: 'script' → 'collage', 'ai_prompt' → 'aiGen'. 'voice' stays 'voice'. Docs without type default to 'collage'.
@@ -2118,17 +2136,8 @@ function normalizeTemplate(raw: any): Template {
 
 const TTCHOP_SERVER_URL = 'https://ttchop-server.lemonsushi.com';
 
-function getAppMode(): 'prod' | 'test' | 'server' {
-  const m = localStorage.getItem('ttchop_mode');
-  if (m === 'prod' || m === 'test' || m === 'server') return m;
-  return localStorage.getItem('ttchop_test_mode') === 'true' ? 'test' : 'prod';
-}
-
-function resolveWebhookUrl(n8nProdName: string, serverPath: string): string {
-  const mode = getAppMode();
-  if (mode === 'server') return TTCHOP_SERVER_URL + serverPath;
-  const base = 'https://flows.lemonsushi.com';
-  return mode === 'test' ? `${base}/webhook-test/${n8nProdName}` : `${base}/webhook/${n8nProdName}`;
+function resolveWebhookUrl(_n8nProdName: string, serverPath: string): string {
+  return TTCHOP_SERVER_URL + serverPath;
 }
 
 class DatabaseService {
@@ -2579,8 +2588,8 @@ class DatabaseService {
   async createMasterVideoFromWebhook(
     productId: string,
     templateId: string,
-    extraNotes: string,
-    language: string,
+    _extraNotes: string,
+    _language: string,
     finalPrompt: string,
     videoProvider: string,
     onProgress: (status: string) => void
@@ -2601,21 +2610,12 @@ class DatabaseService {
 
     const webhookUrl = resolveWebhookUrl('ttchop_aiGen_videoGen', '/ai/generate');
 
-    const payload = getAppMode() === 'server'
-      ? {
-          prompt: finalPrompt,
-          imageUrls: product.modelSheetUrls,
-          model: videoProvider.toLowerCase() === 'veo3' ? 'veo3' : 'seedance',
-          aspectRatio: '9:16',
-        }
-      : {
-          prompt: finalPrompt,
-          productImages: product.modelSheetUrls,
-          templateReferenceVideo: template.referenceVideoUrl || '',
-          language,
-          extraNotes,
-          videoProvider,
-        };
+    const payload = {
+      prompt: finalPrompt,
+      imageUrls: product.modelSheetUrls,
+      model: videoProvider.toLowerCase() === 'veo3' ? 'veo3' : 'seedance',
+      aspectRatio: '9:16',
+    };
 
     try {
       const response = await fetch(webhookUrl, {
@@ -2625,11 +2625,8 @@ class DatabaseService {
       });
 
       if (!response.ok) {
-        if (getAppMode() === 'server') {
-          const errBody = await response.json().catch(() => ({}));
-          throw new Error(errBody.error || `Webhook responded with status ${response.status}`);
-        }
-        throw new Error(`Webhook responded with status ${response.status}`);
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.error || `Webhook responded with status ${response.status}`);
       }
 
       const data = await response.json();
@@ -2853,32 +2850,14 @@ class DatabaseService {
 
     const webhookUrl = resolveWebhookUrl('ttchop_collage_CreateCollage', '/collage/create');
 
-    const isServerMode = getAppMode() === 'server';
-    const sessionsPayload = isServerMode
-      ? selectedSessions.map(s => ({
-          id: s.id,
-          videos: s.videos.map(c => ({
-            id: c.id,
-            downloadUrl: c.downloadUrl,
-            duration: c.duration,
-          })),
-        }))
-      : selectedSessions.map(s => ({
-          id: s.id,
-          name: s.name,
-          clips: s.videos.map(c => ({
-            id: c.id,
-            name: c.name,
-            url: c.downloadUrl,
-            duration: c.duration,
-            trimStart: c.trimStart,
-            trimEnd: c.trimEnd,
-            section: (c as any).section ?? null,
-            source: c.source,
-            metadataStatus: c.metadataStatus ?? null,
-            aiMetadata: c.aiMetadata ?? null,
-          })),
-        }));
+    const sessionsPayload = selectedSessions.map(s => ({
+      id: s.id,
+      videos: s.videos.map(c => ({
+        id: c.id,
+        downloadUrl: c.downloadUrl,
+        duration: c.duration,
+      })),
+    }));
 
     const payload = {
       renderId,

@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/databaseService';
 import type { Product, Template } from '../services/databaseService';
-import { Sparkles, Play, Edit3, Settings, Film } from 'lucide-react';
+import { Sparkles, Play, Edit3, Settings, CalendarDays } from 'lucide-react';
 import { ProductPicker } from './ProductPicker';
 import { useT } from '../context/LanguageContext';
 
 interface MasterCreatorViewProps {
-  onGoToRenders?: () => void;
+  onGoToCalendar?: () => void;
 }
 
 type CreatorStage = 'setup' | 'generating_prompt' | 'edit_prompt' | 'generating_video' | 'done';
 
-export const MasterCreatorView: React.FC<MasterCreatorViewProps> = ({ onGoToRenders }) => {
+export const MasterCreatorView: React.FC<MasterCreatorViewProps> = ({ onGoToCalendar }) => {
   const t = useT();
   const [products, setProducts] = useState<Product[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -121,9 +121,9 @@ export const MasterCreatorView: React.FC<MasterCreatorViewProps> = ({ onGoToRend
             <p style={{ color: 'var(--success)', fontWeight: 700, margin: 0, fontSize: '0.9rem' }}>{t.video_sent}</p>
             {taskId && <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', margin: '2px 0 0', fontFamily: 'monospace' }}>{taskId}</p>}
           </div>
-          {onGoToRenders && (
-            <button onClick={onGoToRenders} className="btn btn-secondary" style={{ fontSize: '0.78rem', padding: '0.4rem 0.75rem', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <Film size={13} /> Renders
+          {onGoToCalendar && (
+            <button onClick={onGoToCalendar} className="btn btn-secondary" style={{ fontSize: '0.78rem', padding: '0.4rem 0.75rem', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <CalendarDays size={13} /> {t.go_to_calendar}
             </button>
           )}
         </div>
@@ -274,9 +274,9 @@ export const MasterCreatorView: React.FC<MasterCreatorViewProps> = ({ onGoToRend
                 <div style={{ textAlign: 'center', padding: '1.5rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '8px', border: '1px solid var(--success)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                   <p style={{ color: 'var(--success)', fontWeight: '700', margin: 0 }}>{t.videoai_submitted}</p>
                   {taskId && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: 0, fontFamily: 'monospace' }}>{t.videoai_task_id} {taskId}</p>}
-                  {onGoToRenders && (
-                    <button onClick={onGoToRenders} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                      <Film size={15} /> {t.go_to_renders}
+                  {onGoToCalendar && (
+                    <button onClick={onGoToCalendar} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <CalendarDays size={15} /> {t.go_to_calendar}
                     </button>
                   )}
                 </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../services/databaseService';
 import type { Product, Render, Template } from '../services/databaseService';
-import { AlertTriangle, RefreshCw, Layers, Upload, Film, FileText, ChevronDown, ChevronUp, Sparkles, CheckCircle, ClipboardCopy } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Layers, Upload, Film, FileText, ChevronDown, ChevronUp, Sparkles, CheckCircle, ClipboardCopy, CalendarDays } from 'lucide-react';
 import { ProductPicker } from './ProductPicker';
 import { useT } from '../context/LanguageContext';
 
@@ -10,10 +10,10 @@ type UploadState = 'idle' | 'uploading' | 'done' | 'error';
 type Stage = 'setup' | 'sending' | 'done' | 'error';
 
 interface OverlaysViewProps {
-  onGoToRenders?: () => void;
+  onGoToCalendar?: () => void;
 }
 
-export const OverlaysView: React.FC<OverlaysViewProps> = ({ onGoToRenders }) => {
+export const OverlaysView: React.FC<OverlaysViewProps> = ({ onGoToCalendar }) => {
   const t = useT();
   const [products, setProducts] = useState<Product[]>([]);
   const [renders, setRenders] = useState<Render[]>([]);
@@ -403,9 +403,9 @@ export const OverlaysView: React.FC<OverlaysViewProps> = ({ onGoToRenders }) => 
           <div style={{ marginBottom: '0.75rem', textAlign: 'center', padding: '1rem', background: 'rgba(16,185,129,0.1)', borderRadius: '8px', border: '1px solid var(--success)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             <p style={{ color: 'var(--success)', fontWeight: 700, margin: 0 }}>{t.video_sent}</p>
             <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: 0, fontFamily: 'monospace' }}>{renderId}</p>
-            {onGoToRenders && (
-              <button onClick={onGoToRenders} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                <Film size={15} /> {t.go_to_renders}
+            {onGoToCalendar && (
+              <button onClick={onGoToCalendar} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                <CalendarDays size={15} /> {t.go_to_calendar}
               </button>
             )}
           </div>

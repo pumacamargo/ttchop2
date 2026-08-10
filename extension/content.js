@@ -32,6 +32,13 @@ function findSourceId() {
   return null;
 }
 
+function findSourceUrl() {
+  // URL limpia (sin query params) que apunta a la página del producto scrapeado.
+  const canonical = document.querySelector('link[rel="canonical"]')?.href;
+  if (canonical) return canonical.split('?')[0].split('#')[0];
+  return location.href.split('?')[0].split('#')[0];
+}
+
 function findProductData() {
   const h1 = document.querySelector('h1');
   const name = h1 ? h1.textContent.trim() : '';
@@ -55,6 +62,7 @@ function findProductData() {
   const region = findRegion();
   const canonical = document.querySelector('link[rel="canonical"]')?.href || '';
   const pageUrl = canonical || location.href;
+  const sourceUrl = findSourceUrl();
 
   return {
     name,
@@ -62,7 +70,8 @@ function findProductData() {
     modelSheetUrls,
     regionCode: region?.code || null,
     regionLabel: region?.label || null,
-    sourceId: findSourceId()
+    sourceId: findSourceId(),
+    sourceUrl
   };
 }
 
