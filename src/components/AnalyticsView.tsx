@@ -8,46 +8,13 @@ import type { AnalyticsOrder, Render } from '../services/databaseService';
 import { parseAnalyticsFile, AnalyticsImportError } from '../services/analyticsImport';
 import { useT } from '../context/LanguageContext';
 import type { Translations } from '../i18n';
-
-type Period = 'week' | 'month' | 'year' | 'all';
-
-// ── Date helpers (period filtering) ─────────────────────────────────────────
-
-// Todas las fronteras se calculan en UTC porque las fechas del export se guardan como hora de
-// pared anclada a UTC (ver parseTikTokDate). Mezclarlas con fronteras en hora local metería un
-// desfase del tamaño del offset del usuario y movería órdenes de un período a otro.
-function startOfWeekMonday(d: Date): Date {
-  const nd = new Date(d);
-  const day = nd.getUTCDay(); // 0 = domingo
-  const diff = day === 0 ? -6 : 1 - day;
-  nd.setUTCDate(nd.getUTCDate() + diff);
-  nd.setUTCHours(0, 0, 0, 0);
-  return nd;
-}
-function startOfMonth(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-}
-function startOfYear(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-}
-
-function filterByPeriod(orders: AnalyticsOrder[], period: Period): AnalyticsOrder[] {
-  if (period === 'all') return orders;
-  const now = new Date();
-  const cutoff = period === 'week' ? startOfWeekMonday(now) : period === 'month' ? startOfMonth(now) : startOfYear(now);
-  return orders.filter(o => o.orderDate !== null && new Date(o.orderDate) >= cutoff);
-}
-
-// ── Currency formatting ──────────────────────────────────────────────────────
-
-function formatCurrency(value: number, currency: string): string {
-  if (!currency) return value.toLocaleString();
-  try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value);
-  } catch {
-    return `${value.toLocaleString()} ${currency}`;
-  }
-}
+import {
+  type Period, filterByPeriod, formatCurrency, aggregateBy, aggregateByProduct, buildVideoRevenue, computeOrderMetrics,
+} from '../utils/analytics';
+import { useCurrencySelection } from '../hooks/useCurrencySelection';
+import {
+  SectionCard, StatTile, BarRow, LegendDot, SettlementBar, PeriodSelector, CurrencySelector,
+} from './shared/AnalyticsUI';
 
 function mapImportError(err: AnalyticsImportError, t: Translations): string {
   switch (err.reason) {
@@ -61,112 +28,6 @@ function mapImportError(err: AnalyticsImportError, t: Translations): string {
   }
 }
 
-// ── Aggregation helpers ──────────────────────────────────────────────────────
-
-interface CategoryAgg {
-  key: string;
-  gmv: number;
-  revenue: number;
-  orderIds: Set<string>;
-  settledOrderIds: Set<string>;
-}
-
-function aggregateBy(orders: AnalyticsOrder[], keyFn: (o: AnalyticsOrder) => string): Map<string, CategoryAgg> {
-  const map = new Map<string, CategoryAgg>();
-  orders.forEach(o => {
-    const key = keyFn(o);
-    if (!key) return;
-    const entry = map.get(key) ?? { key, gmv: 0, revenue: 0, orderIds: new Set<string>(), settledOrderIds: new Set<string>() };
-    entry.gmv += o.gmv;
-    entry.orderIds.add(o.orderId);
-    if (o.settlementStatus === 'Settled') {
-      entry.revenue += o.totalFinalEarnedAmount;
-      entry.settledOrderIds.add(o.orderId);
-    }
-    map.set(key, entry);
-  });
-  return map;
-}
-
-// ── Small presentational pieces ──────────────────────────────────────────────
-
-const SectionCard: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <div className="glass-card" style={{ padding: '0.9rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-    <h4 style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>{title}</h4>
-    {children}
-  </div>
-);
-
-const StatTile: React.FC<{ label: string; value: string; accent?: string }> = ({ label, value, accent }) => (
-  <div style={{
-    background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
-    padding: '0.65rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 0,
-  }}>
-    <span style={{ fontSize: '0.64rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-      {label}
-    </span>
-    <span style={{
-      fontSize: '1.05rem', fontWeight: 800, fontFamily: 'var(--font-heading)',
-      color: accent ?? 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-    }}>
-      {value}
-    </span>
-  </div>
-);
-
-/** A single sequential/categorical bar: rounded-end SVG rect on a track, label left, value right. */
-const BarRow: React.FC<{ label: string; pct: number; color: string; valueLabel: string }> = ({ label, pct, color, valueLabel }) => {
-  const clamped = Math.max(0, Math.min(1, pct));
-  const fillWidth = clamped > 0 ? Math.max(clamped * 100, 3) : 0;
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-      <span style={{
-        fontSize: '0.72rem', color: 'var(--text-secondary)', width: '92px', flexShrink: 0,
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }} title={label}>
-        {label}
-      </span>
-      <svg viewBox="0 0 100 10" preserveAspectRatio="none" style={{ flex: 1, height: 10, minWidth: 0, display: 'block' }} aria-hidden="true">
-        <rect x={0} y={0} width={100} height={10} rx={4} fill="var(--bg-input)" />
-        {fillWidth > 0 && <rect x={0} y={0} width={fillWidth} height={10} rx={4} fill={color} />}
-      </svg>
-      <span style={{
-        fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)', width: '96px', textAlign: 'right',
-        flexShrink: 0, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>
-        {valueLabel}
-      </span>
-    </div>
-  );
-};
-
-const LegendDot: React.FC<{ color: string; label: string }> = ({ color, label }) => (
-  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-    <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
-    {label}
-  </span>
-);
-
-/** Settlement rate as a 2-segment stacked bar (status colors: success = settled, warning = the rest). */
-const SettlementBar: React.FC<{ settledPct: number; settledLabel: string; otherLabel: string }> = ({ settledPct, settledLabel, otherLabel }) => {
-  const pct = Math.max(0, Math.min(1, settledPct));
-  const settledWidth = Math.max(pct * 100 - (pct > 0 && pct < 1 ? 0.6 : 0), 0);
-  const otherWidth = Math.max(100 - pct * 100 - (pct > 0 && pct < 1 ? 0.6 : 0), 0);
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.4rem' }}>
-        <LegendDot color="var(--success)" label={settledLabel} />
-        <LegendDot color="var(--warning)" label={otherLabel} />
-      </div>
-      <svg viewBox="0 0 100 12" preserveAspectRatio="none" style={{ width: '100%', height: 12, display: 'block' }} aria-hidden="true">
-        <rect x={0} y={0} width={100} height={12} rx={5} fill="var(--bg-input)" />
-        {settledWidth > 0 && <rect x={0} y={0} width={settledWidth} height={12} rx={4} fill="var(--success)" />}
-        {otherWidth > 0 && <rect x={100 - otherWidth} y={0} width={otherWidth} height={12} rx={4} fill="var(--warning)" />}
-      </svg>
-    </div>
-  );
-};
-
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export const AnalyticsView: React.FC = () => {
@@ -178,7 +39,6 @@ export const AnalyticsView: React.FC = () => {
   const [loadError, setLoadError] = useState('');
 
   const [period, setPeriod] = useState<Period>('all');
-  const [selectedCurrency, setSelectedCurrency] = useState('');
 
   const [importing, setImporting] = useState(false);
   const [importStep, setImportStep] = useState('');
@@ -204,74 +64,25 @@ export const AnalyticsView: React.FC = () => {
   useEffect(() => { loadAll(); }, [loadAll]);
 
   // ── Currency: group by currency, never sum across currencies ──────────────
-  const currencies = useMemo(() => Array.from(new Set(orders.map(o => o.currency).filter(Boolean))), [orders]);
+  const { currencies, selectedCurrency, setSelectedCurrency, currencyOrders } = useCurrencySelection(orders);
 
-  const dominantCurrency = useMemo(() => {
-    const totals = new Map<string, number>();
-    orders.forEach(o => totals.set(o.currency, (totals.get(o.currency) ?? 0) + o.gmv));
-    let best = '';
-    let bestVal = -Infinity;
-    totals.forEach((v, k) => { if (v > bestVal) { bestVal = v; best = k; } });
-    return best;
-  }, [orders]);
-
-  useEffect(() => {
-    if (currencies.length === 0) { setSelectedCurrency(''); return; }
-    if (!currencies.includes(selectedCurrency)) setSelectedCurrency(dominantCurrency);
-  }, [currencies, dominantCurrency, selectedCurrency]);
-
-  const currencyOrders = useMemo(
-    () => (selectedCurrency ? orders.filter(o => o.currency === selectedCurrency) : orders),
-    [orders, selectedCurrency]
-  );
   const periodOrders = useMemo(() => filterByPeriod(currencyOrders, period), [currencyOrders, period]);
 
   // ── Metrics ────────────────────────────────────────────────────────────────
-  const metrics = useMemo(() => {
-    const gmvTotal = periodOrders.reduce((s, o) => s + o.gmv, 0);
-    const settled = periodOrders.filter(o => o.settlementStatus === 'Settled');
-    const revenueTotal = settled.reduce((s, o) => s + o.totalFinalEarnedAmount, 0);
-    const orderIds = new Set(periodOrders.map(o => o.orderId));
-    const settledOrderIds = new Set(settled.map(o => o.orderId));
-    const unitsSold = periodOrders.reduce((s, o) => s + o.itemsSold, 0);
-    const refunds = periodOrders.reduce((s, o) => s + o.itemsRefunded, 0);
-    const settlementRate = orderIds.size > 0 ? settledOrderIds.size / orderIds.size : 0;
-    return { gmvTotal, revenueTotal, orderCount: orderIds.size, unitsSold, refunds, settlementRate };
-  }, [periodOrders]);
+  const metrics = useMemo(() => computeOrderMetrics(periodOrders), [periodOrders]);
 
-  const topProducts = useMemo(() => {
-    const map = new Map<string, { productId: string; productName: string; gmv: number }>();
-    periodOrders.forEach(o => {
-      if (!o.productId) return;
-      const entry = map.get(o.productId) ?? { productId: o.productId, productName: o.productName, gmv: 0 };
-      entry.gmv += o.gmv;
-      map.set(o.productId, entry);
-    });
-    return Array.from(map.values()).sort((a, b) => b.gmv - a.gmv).slice(0, 5);
-  }, [periodOrders]);
+  const topProducts = useMemo(
+    () => aggregateByProduct(periodOrders).sort((a, b) => b.gmv - a.gmv).slice(0, 5),
+    [periodOrders]
+  );
 
   const contentTypeAgg = useMemo(() => aggregateBy(periodOrders, o => o.contentType), [periodOrders]);
   const orderTypeAgg = useMemo(() => aggregateBy(periodOrders, o => o.orderType), [periodOrders]);
 
-  const revenueByVideo = useMemo(() => {
-    const map = new Map<string, { contentId: string; contentType: string; gmv: number; revenue: number; orderIds: Set<string> }>();
-    periodOrders.forEach(o => {
-      if (!o.contentId) return;
-      const entry = map.get(o.contentId) ?? { contentId: o.contentId, contentType: o.contentType, gmv: 0, revenue: 0, orderIds: new Set<string>() };
-      entry.gmv += o.gmv;
-      if (o.settlementStatus === 'Settled') entry.revenue += o.totalFinalEarnedAmount;
-      entry.orderIds.add(o.orderId);
-      map.set(o.contentId, entry);
-    });
-    return Array.from(map.values())
-      .map(entry => ({
-        ...entry,
-        orderCount: entry.orderIds.size,
-        render: renders.find(r => r.tiktokVideoId === entry.contentId),
-      }))
-      .sort((a, b) => b.revenue - a.revenue || b.gmv - a.gmv)
-      .slice(0, 8);
-  }, [periodOrders, renders]);
+  const revenueByVideo = useMemo(
+    () => buildVideoRevenue(periodOrders, renders).slice(0, 8),
+    [periodOrders, renders]
+  );
 
   // ── Import handler ──────────────────────────────────────────────────────────
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -440,49 +251,29 @@ export const AnalyticsView: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
 
           {/* Period selector */}
-          <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '2px' }}>
-            {(['week', 'month', 'year', 'all'] as Period[]).map(p => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                style={{
-                  padding: '0.35rem 0.9rem', borderRadius: '999px', minHeight: '44px',
-                  fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.03em', cursor: 'pointer', whiteSpace: 'nowrap',
-                  background: period === p ? 'var(--gradient)' : 'var(--bg-card)',
-                  color: period === p ? '#fff' : 'var(--text-secondary)',
-                  border: period === p ? '1px solid transparent' : '1px solid var(--border)',
-                }}
-              >
-                {p === 'week' ? t.analytics_period_week : p === 'month' ? t.analytics_period_month : p === 'year' ? t.analytics_period_year : t.analytics_period_all}
-              </button>
-            ))}
-          </div>
+          <PeriodSelector
+            value={period}
+            onChange={p => setPeriod(p as Period)}
+            options={[
+              { key: 'week', label: t.analytics_period_week },
+              { key: 'month', label: t.analytics_period_month },
+              { key: 'year', label: t.analytics_period_year },
+              { key: 'all', label: t.analytics_period_all },
+            ]}
+          />
 
           {/* Currency selector — never sums across currencies */}
-          {currencies.length > 1 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}>
+          <CurrencySelector
+            currencies={currencies}
+            selected={selectedCurrency}
+            onSelect={setSelectedCurrency}
+            note={(
+              <>
                 <Info size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
                 <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>{t.analytics_currency_note}</p>
-              </div>
-              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                {currencies.map(c => (
-                  <button
-                    key={c}
-                    onClick={() => setSelectedCurrency(c)}
-                    style={{
-                      padding: '0.3rem 0.9rem', borderRadius: '999px', minHeight: '44px', fontSize: '0.7rem', fontWeight: 700,
-                      cursor: 'pointer', background: selectedCurrency === c ? 'var(--secondary-glow)' : 'var(--bg-card)',
-                      color: selectedCurrency === c ? 'var(--secondary)' : 'var(--text-secondary)',
-                      border: selectedCurrency === c ? '1px solid var(--secondary-glow)' : '1px solid var(--border)',
-                    }}
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+              </>
+            )}
+          />
 
           {periodOrders.length === 0 ? (
             <div className="glass-card" style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-secondary)' }}>

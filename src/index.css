@@ -657,6 +657,18 @@ h1, h2, h3, h4, h5 {
   animation: pulse-glow 2s infinite ease-in-out;
 }
 
+/* Loading skeletons — pulsing placeholder blocks shown while a view's data is fetching */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.25; }
+}
+
+.skeleton-block {
+  background: var(--bg-input);
+  border-radius: 10px;
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
 @keyframes spin-slow {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

@@ -143,7 +143,7 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
 
         {/* Dynamic Views Switcher */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
-          {activeTab === 'dashboard' && <DashboardView />}
+          {activeTab === 'dashboard' && <DashboardView onGoToAnalytics={() => setActiveTab('analytics')} />}
           {activeTab === 'products' && <ProductsView />}
           {activeTab === 'sessions' && <SessionsView />}
           {activeTab === 'templates' && (
