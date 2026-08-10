@@ -14,6 +14,7 @@ import {
   arrayRemove
 } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
+import type { ParsedAnalyticsOrder } from './analyticsImport';
 
 export type VideoSource = 'recorded' | 'ai_generated';
 
@@ -103,6 +104,15 @@ export interface Render {
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+  // Analytics (Phase 5): links this render to the video the user actually published
+  // on TikTok, so sales in the TikTok Shop export can be traced back to the
+  // template/voice/language that produced it.
+  tiktokVideoId?: string;   // TikTok's Content ID, pasted by the user after publishing
+  publishedAt?: string;     // ISO timestamp of when the user linked/published the video
+  scriptTemplateId?: string;
+  voiceTemplateId?: string;
+  aiTemplateId?: string;
+  language?: string;
 }
 
 export type ScheduledRenderStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -146,6 +156,12 @@ export interface MasterVideo {
   usedCombinations: string[];
   variationsCount: number;
   createdAt: string;
+}
+
+export interface AnalyticsOrder extends ParsedAnalyticsOrder {
+  id: string; // same as compositeKey — `${orderId}_${skuId}`
+  userId: string;
+  importedAt: string;
 }
 
 export interface VideoVariation {
@@ -2589,7 +2605,7 @@ class DatabaseService {
     productId: string,
     templateId: string,
     _extraNotes: string,
-    _language: string,
+    language: string,
     finalPrompt: string,
     videoProvider: string,
     onProgress: (status: string) => void
@@ -2647,6 +2663,8 @@ class DatabaseService {
         status: 'pending',
         productId,
         productName,
+        aiTemplateId: templateId,
+        language,
       }, taskId);
 
       onProgress("Sent! Tracking in Renders.");
@@ -2844,6 +2862,9 @@ class DatabaseService {
       status: 'pending',
       productId,
       productName: product.name,
+      scriptTemplateId: collageTemplateId || undefined,
+      voiceTemplateId: voiceId || undefined,
+      language,
     }, renderId);
 
     onProgress("Sending to n8n...");
@@ -2917,6 +2938,15 @@ class DatabaseService {
 
   async updateRender(id: string, data: Partial<Render>): Promise<void> {
     await updateDoc(doc(firestore, 'renders', id), { ...data, updatedAt: new Date().toISOString() });
+  }
+
+  /** Links a render to the TikTok video it was published as, so Analytics can match sales back to it. */
+  async linkRenderToTikTok(id: string, tiktokVideoId: string): Promise<void> {
+    await updateDoc(doc(firestore, 'renders', id), {
+      tiktokVideoId,
+      publishedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   async deleteRender(id: string): Promise<void> {
@@ -3131,6 +3161,43 @@ class DatabaseService {
     const user = auth.currentUser;
     if (!user) return;
     await setDoc(doc(firestore, 'user_prefs', user.uid), { [key]: value }, { merge: true });
+  }
+
+  // ── Analytics: TikTok Shop order import ──────────────────────────────────
+  // One document per order line under analytics_orders/{userId}/orders/{orderId}_{skuId}.
+  // The composite id makes re-importing the same file idempotent (setDoc overwrites
+  // the same docs instead of duplicating) and keeps every document well under the
+  // 1MB Firestore limit regardless of export size.
+
+  async getAnalyticsOrders(): Promise<AnalyticsOrder[]> {
+    const user = auth.currentUser;
+    if (!user) return [];
+    const snap = await getDocs(collection(firestore, 'analytics_orders', user.uid, 'orders'));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as AnalyticsOrder));
+  }
+
+  async importAnalyticsOrders(orders: ParsedAnalyticsOrder[]): Promise<{ newCount: number; updatedCount: number }> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+
+    const existingKeys = new Set((await this.getAnalyticsOrders()).map(o => o.id));
+    const now = new Date().toISOString();
+    let newCount = 0;
+    let updatedCount = 0;
+
+    const BATCH_LIMIT = 500;
+    for (let i = 0; i < orders.length; i += BATCH_LIMIT) {
+      const chunk = orders.slice(i, i + BATCH_LIMIT);
+      const batch = writeBatch(firestore);
+      chunk.forEach(order => {
+        const ref = doc(firestore, 'analytics_orders', user.uid, 'orders', order.compositeKey);
+        batch.set(ref, { ...order, id: order.compositeKey, userId: user.uid, importedAt: now });
+        if (existingKeys.has(order.compositeKey)) updatedCount++; else newCount++;
+      });
+      await batch.commit();
+    }
+
+    return { newCount, updatedCount };
   }
 }
 

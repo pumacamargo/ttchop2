@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { db } from '../services/databaseService';
 import type { Product, Render } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
-import { RefreshCw, Sparkles, Scissors, Layers, Play, Share2, ShieldAlert, Film } from 'lucide-react';
+import { RefreshCw, Sparkles, Scissors, Layers, Play, Share2, ShieldAlert, Film, Link2, Check, Pencil } from 'lucide-react';
 
 interface ProductRendersTabProps {
   product: Product;
@@ -113,6 +113,37 @@ const ProductRenderCard: React.FC<{ render: Render }> = ({ render }) => {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [tiktokVideoId, setTiktokVideoId] = useState(render.tiktokVideoId ?? '');
+  const [editingTiktok, setEditingTiktok] = useState(false);
+  const [tiktokInput, setTiktokInput] = useState('');
+  const [savingTiktok, setSavingTiktok] = useState(false);
+  const [tiktokError, setTiktokError] = useState('');
+  const [tiktokSaved, setTiktokSaved] = useState(false);
+
+  const startEditingTiktok = () => {
+    setTiktokInput(tiktokVideoId);
+    setTiktokError('');
+    setEditingTiktok(true);
+  };
+
+  const handleSaveTiktok = async () => {
+    const value = tiktokInput.trim();
+    if (!value) return;
+    setSavingTiktok(true);
+    setTiktokError('');
+    try {
+      await db.linkRenderToTikTok(render.id, value);
+      setTiktokVideoId(value);
+      setEditingTiktok(false);
+      setTiktokSaved(true);
+      setTimeout(() => setTiktokSaved(false), 2000);
+    } catch (err) {
+      console.error(err);
+      setTiktokError(t.render_tiktok_link_error);
+    } finally {
+      setSavingTiktok(false);
+    }
+  };
 
   const typeLabel: Record<Render['type'], string> = {
     ai: t.render_type_ai,
@@ -185,6 +216,97 @@ const ProductRenderCard: React.FC<{ render: Render }> = ({ render }) => {
           >
             <Share2 size={12} /> {copied ? t.copied : t.copy_link}
           </button>
+        </div>
+      )}
+
+      {/* TikTok video link — lets the user tie this render to the published TikTok
+          video so Analytics can match order-export rows (by Content ID) back to it. */}
+      {render.status === 'done' && render.videoUrl && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+          {!editingTiktok ? (
+            tiktokVideoId ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '2px 8px', borderRadius: 999, fontSize: '0.65rem', fontWeight: 600,
+                  background: 'color-mix(in srgb, var(--success) 12%, transparent)', color: 'var(--success)',
+                }}>
+                  <Check size={10} /> {t.render_tiktok_linked}
+                </span>
+                <span style={{
+                  fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'monospace',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1,
+                }}>
+                  {tiktokVideoId}
+                </span>
+                <button
+                  onClick={startEditingTiktok}
+                  aria-label={t.render_tiktok_link_edit}
+                  style={{
+                    minWidth: '44px', minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-muted)', cursor: 'pointer', flexShrink: 0,
+                  }}
+                >
+                  <Pencil size={12} />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={startEditingTiktok}
+                style={{
+                  minHeight: '44px', padding: '4px 10px', borderRadius: 6, fontSize: '0.73rem', fontWeight: 600,
+                  background: 'color-mix(in srgb, var(--secondary) 6%, transparent)', border: '1px dashed var(--border)',
+                  color: 'var(--text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
+                }}
+              >
+                <Link2 size={12} /> {t.render_tiktok_link_cta}
+              </button>
+            )
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <div style={{ display: 'flex', gap: '0.35rem' }}>
+                <input
+                  value={tiktokInput}
+                  onChange={e => setTiktokInput(e.target.value)}
+                  placeholder={t.render_tiktok_link_placeholder}
+                  disabled={savingTiktok}
+                  style={{
+                    flex: 1, minHeight: '44px', padding: '0 8px', borderRadius: 6, fontSize: '0.75rem',
+                    background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text-primary)',
+                  }}
+                />
+                <button
+                  onClick={handleSaveTiktok}
+                  disabled={savingTiktok || !tiktokInput.trim()}
+                  style={{
+                    minHeight: '44px', minWidth: '44px', padding: '0 10px', borderRadius: 6, fontSize: '0.75rem', fontWeight: 700,
+                    background: 'var(--primary)', border: 'none', color: '#fff',
+                    cursor: savingTiktok || !tiktokInput.trim() ? 'default' : 'pointer',
+                    opacity: savingTiktok || !tiktokInput.trim() ? 0.6 : 1,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  {savingTiktok ? <RefreshCw size={13} className="loading-spinner" /> : t.save}
+                </button>
+                <button
+                  onClick={() => setEditingTiktok(false)}
+                  disabled={savingTiktok}
+                  style={{
+                    minHeight: '44px', padding: '0 10px', borderRadius: 6, fontSize: '0.75rem',
+                    background: 'none', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer',
+                  }}
+                >
+                  {t.cancel}
+                </button>
+              </div>
+              {tiktokError && (
+                <p style={{ fontSize: '0.68rem', color: 'var(--danger)', margin: 0 }}>{tiktokError}</p>
+              )}
+            </div>
+          )}
+          {tiktokSaved && (
+            <span style={{ fontSize: '0.65rem', color: 'var(--success)' }}>{t.render_tiktok_link_saved}</span>
+          )}
         </div>
       )}
 

@@ -47,6 +47,13 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // Analytics: imported TikTok Shop order lines — one doc per Order ID + SKU ID,
+    // path-scoped by userId (no resource.data.userId to check on create, since the
+    // path segment already pins the owner).
+    match /analytics_orders/{userId}/orders/{orderId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
     // Scheduled renders — each user owns their own jobs
     match /scheduled_renders/{document=**} {
       allow read, delete: if request.auth != null && request.auth.uid == resource.data.userId;
