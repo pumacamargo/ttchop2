@@ -1,0 +1,47 @@
+#ttchop-import-btn {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 999999;
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 12px 20px;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+#ttchop-import-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+#ttchop-toast {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  z-index: 999999;
+  background: #0f172a;
+  color: #f1f5f9;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  max-width: 280px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+#ttchop-toast.error {
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+#ttchop-toast.success {
+  border-color: #10b981;
+  color: #6ee7b7;
+}

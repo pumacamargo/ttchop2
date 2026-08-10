@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>TTChop</title>
+  <style>
+    body {
+      width: 260px;
+      font-family: system-ui, sans-serif;
+      background: #070a13;
+      color: #f1f5f9;
+      padding: 16px;
+      margin: 0;
+    }
+    h1 {
+      font-size: 0.95rem;
+      margin: 0 0 12px;
+    }
+    label {
+      display: block;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      margin-bottom: 4px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px;
+      margin-bottom: 10px;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #f1f5f9;
+    }
+    button {
+      width: 100%;
+      padding: 8px;
+      border: none;
+      border-radius: 6px;
+      background: #6366f1;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    #status {
+      font-size: 0.75rem;
+      color: #f87171;
+      margin-top: 8px;
+      min-height: 1em;
+    }
+    #loggedInView {
+      display: none;
+    }
+    #loggedInView p {
+      font-size: 0.8rem;
+      color: #94a3b8;
+    }
+    #logoutBtn {
+      background: rgba(239, 68, 68, 0.25);
+    }
+  </style>
+</head>
+<body>
+  <h1>TTChop</h1>
+
+  <div id="loginView">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" />
+    <label for="password">Contraseña</label>
+    <input id="password" type="password" autocomplete="current-password" />
+    <button id="loginBtn">Iniciar sesión</button>
+  </div>
+
+  <div id="loggedInView">
+    <p>Sesión iniciada como <strong id="sessionEmail"></strong></p>
+    <button id="logoutBtn">Cerrar sesión</button>
+  </div>
+
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
