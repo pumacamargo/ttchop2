@@ -47,6 +47,11 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // Calendar strategy — free-text posting strategy, one doc per user
+    match /calendar_strategy/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
     // Analytics: imported TikTok Shop order lines — one doc per Order ID + SKU ID,
     // path-scoped by userId (no resource.data.userId to check on create, since the
     // path segment already pins the owner).

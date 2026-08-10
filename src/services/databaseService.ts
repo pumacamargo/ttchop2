@@ -142,6 +142,44 @@ export interface ScheduledRender {
   createdAt: string;
 }
 
+// ── Calendar Strategy (Phase 4) ────────────────────────────────────────────
+// One doc per user at calendar_strategy/{userId}: free-text posting strategy
+// the user writes, later fed to the /calendar/populate endpoint as context.
+export interface CalendarStrategy {
+  strategy: string;
+  updatedAt: string; // ISO
+}
+
+// ── Calendar Populate (Phase 4) ─────────────────────────────────────────────
+// Client-side contract for the (not-yet-implemented) POST /calendar/populate
+// endpoint — see PENDIENTES-SERVIDOR.md for the full spec the server must satisfy.
+export interface CalendarPopulateProduct {
+  id: string;
+  name: string;
+  description: string;
+  region: string;
+}
+
+export interface CalendarPopulateTemplateRef {
+  id: string;
+  type: TemplateType;
+  title: string;
+}
+
+export interface CalendarPopulateExistingJob {
+  localDate: string;
+  productId: string;
+}
+
+export interface CalendarPopulateRequest {
+  strategy: string;
+  timezone: string;
+  horizonDays: number;
+  products: CalendarPopulateProduct[];
+  templates: CalendarPopulateTemplateRef[];
+  existingJobs: CalendarPopulateExistingJob[];
+}
+
 export interface MasterVideo {
   id: string;
   userId: string;
@@ -3161,6 +3199,40 @@ class DatabaseService {
     const user = auth.currentUser;
     if (!user) return;
     await setDoc(doc(firestore, 'user_prefs', user.uid), { [key]: value }, { merge: true });
+  }
+
+  // ── Calendar Strategy ────────────────────────────────────────────────────
+
+  async getCalendarStrategy(): Promise<CalendarStrategy | null> {
+    const user = auth.currentUser;
+    if (!user) return null;
+    const snap = await getDoc(doc(firestore, 'calendar_strategy', user.uid));
+    return snap.exists() ? (snap.data() as CalendarStrategy) : null;
+  }
+
+  async saveCalendarStrategy(strategyText: string): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const payload: CalendarStrategy = { strategy: strategyText, updatedAt: new Date().toISOString() };
+    await setDoc(doc(firestore, 'calendar_strategy', user.uid), payload);
+  }
+
+  // ── Calendar Populate: LLM-proposed plan (server endpoint not implemented yet) ──
+  // Throws on network failure or non-OK response; the caller (CalendarStrategyPanel)
+  // is responsible for validating the parsed JSON shape before trusting it, and for
+  // presenting a single friendly "not available yet" message for any failure mode.
+
+  async populateCalendar(payload: CalendarPopulateRequest): Promise<unknown> {
+    const webhookUrl = resolveWebhookUrl('ttchop_calendar_populate', '/calendar/populate');
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(`Calendar populate endpoint responded with status ${response.status}`);
+    }
+    return response.json();
   }
 
   // ── Analytics: TikTok Shop order import ──────────────────────────────────
