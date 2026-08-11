@@ -212,3 +212,34 @@ Response: JSON libre con el análisis (se guarda tal cual en `aiMetadata`).
 
 Cuando exista, basta con quitar `'ttchop_videoMetaExtractor'` del set `N8N_ONLY_FLOWS` para que la
 llamada vuelva a `ttchop-server` sin ningún otro cambio.
+
+---
+
+## CORS: falta permitir el dominio de ttchop2 — BLOQUEA TODO EL PIPELINE
+
+### Síntoma
+Cualquier acción que llame al servidor (generar diálogo, generar collage, generar video AI,
+overlays) falla en el navegador con **"Failed to fetch"**. Con `curl` los endpoints responden
+bien, porque curl no aplica CORS.
+
+### Causa
+`ttchop-server` tiene una lista blanca de orígenes que incluye `https://ttchop.web.app` pero **no**
+`https://ttchop2.web.app`. Comprobado con un preflight:
+
+```
+OPTIONS /collage/dialogue   Origin: https://ttchop.web.app
+  → access-control-allow-origin: https://ttchop.web.app     (permitido)
+
+OPTIONS /collage/dialogue   Origin: https://ttchop2.web.app
+  → (sin cabecera access-control-allow-origin)              (bloqueado)
+```
+
+Afecta a los cinco endpoints: `/ai/prompt`, `/ai/generate`, `/collage/dialogue`,
+`/collage/create`, `/overlay/create`.
+
+### Qué hay que hacer
+Agregar `https://ttchop2.web.app` a la lista de orígenes permitidos en la configuración de CORS de
+`ttchop-server`. Conviene incluir también `http://localhost:5173` para desarrollo local.
+
+No hay nada que arreglar del lado del cliente: el navegador bloquea la respuesta antes de que el
+código de la app pueda verla.
