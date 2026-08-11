@@ -182,3 +182,33 @@ reports/{userId}/history/{reportId}
 ```
 
 Reglas en `firestore.rules`: mismo patrón que `analytics_orders` (path-scoped por `userId`, sin chequear `resource.data.userId`).
+
+---
+
+## `POST /ai/meta` (análisis de clips) — FALTA EN EL SERVIDOR
+
+### Estado actual
+Este endpoint **no existe** en `ttchop-server` (devuelve 404). El análisis de clips sigue funcionando
+porque el cliente lo dirige al flujo de n8n `https://flows.lemonsushi.com/webhook/ttchop_videoMetaExtractor`,
+que es donde vivía originalmente.
+
+Es la única llamada que no pasa por `ttchop-server`. La excepción está declarada en
+`src/services/databaseService.ts`, en el set `N8N_ONLY_FLOWS` junto a `resolveWebhookUrl`.
+
+### Por qué quedó así
+Al eliminar los modos prod/test/server se mandaron todas las llamadas a `ttchop-server`, pero ese
+servidor nunca implementó `/ai/meta`. El resultado fue que todos los clips subidos quedaban con
+`metadataStatus: 'error'`. Se revirtió esa llamada a n8n como corrección.
+
+### Qué debe hacer si se implementa
+Recibe un clip ya subido a Storage y devuelve el análisis de su contenido, que la app guarda en
+`SessionVideo.aiMetadata` y muestra en la tarjeta del clip.
+
+Request:
+```ts
+{ sessionId: string; videoId: string; videoUrl: string; videoName: string; duration: number }
+```
+Response: JSON libre con el análisis (se guarda tal cual en `aiMetadata`).
+
+Cuando exista, basta con quitar `'ttchop_videoMetaExtractor'` del set `N8N_ONLY_FLOWS` para que la
+llamada vuelva a `ttchop-server` sin ningún otro cambio.

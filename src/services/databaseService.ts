@@ -2269,8 +2269,17 @@ function normalizeTemplate(raw: any): Template {
 }
 
 const TTCHOP_SERVER_URL = 'https://ttchop-server.lemonsushi.com';
+const N8N_WEBHOOK_BASE = 'https://flows.lemonsushi.com/webhook';
 
-function resolveWebhookUrl(_n8nProdName: string, serverPath: string): string {
+// ttchop-server implementa /ai/prompt, /ai/generate, /collage/dialogue, /collage/create y
+// /overlay/create, pero NO /ai/meta — ese análisis solo existe como flujo de n8n. Al eliminar
+// los modos prod/test/server se mandó todo al servidor y esa llamada empezó a dar 404, lo que
+// dejaba todos los clips subidos con metadataStatus 'error'. Por eso el análisis de video sigue
+// yendo a n8n hasta que el servidor lo implemente (ver PENDIENTES-SERVIDOR.md).
+const N8N_ONLY_FLOWS = new Set(['ttchop_videoMetaExtractor']);
+
+function resolveWebhookUrl(n8nProdName: string, serverPath: string): string {
+  if (N8N_ONLY_FLOWS.has(n8nProdName)) return `${N8N_WEBHOOK_BASE}/${n8nProdName}`;
   return TTCHOP_SERVER_URL + serverPath;
 }
 
