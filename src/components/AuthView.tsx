@@ -233,6 +233,13 @@ export const AuthView: React.FC = () => {
             </p>
           )}
         </div>
+
+        {/* Enlaces legales: deben ser alcanzables sin cuenta (requisito de revisión de TikTok) */}
+        <p style={{ marginTop: '1.5rem', textAlign: 'center', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+          <a href="/terms" style={{ color: 'var(--text-muted)' }}>Terms of Service</a>
+          {' · '}
+          <a href="/privacy" style={{ color: 'var(--text-muted)' }}>Privacy Policy</a>
+        </p>
       </div>
     </div>
   );
