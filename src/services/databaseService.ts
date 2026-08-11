@@ -2526,16 +2526,25 @@ class DatabaseService {
       return new Promise((resolve, reject) => {
         const task = uploadBytesResumable(fileRef, file);
 
-        // Stall detector: if progress doesn't advance for 30s, cancel and let caller retry
+        // Detector de atascos. Distingue dos casos que antes se trataban igual con 30s, lo que
+        // mataba subidas sanas: en una red móvil lenta un archivo de 70 MB puede tardar más de
+        // 30s en completar su PRIMER bloque, y el progreso se queda en 0% legítimamente.
+        //   - Antes del primer byte: se dan 3 minutos de gracia.
+        //   - Ya transfiriendo: 90s sin avanzar sí es un atasco real.
+        const FIRST_BYTE_GRACE_MS = 180_000;
+        const STALL_MS = 90_000;
         let lastBytes = 0;
         let lastAdvance = Date.now();
         const stallTimer = setInterval(() => {
           const current = task.snapshot.bytesTransferred;
           if (current > lastBytes) { lastBytes = current; lastAdvance = Date.now(); }
-          else if (Date.now() - lastAdvance > 30_000) {
-            clearInterval(stallTimer);
-            task.cancel();
-            reject(new Error('upload_stalled'));
+          else {
+            const limit = lastBytes === 0 ? FIRST_BYTE_GRACE_MS : STALL_MS;
+            if (Date.now() - lastAdvance > limit) {
+              clearInterval(stallTimer);
+              task.cancel();
+              reject(new Error('upload_stalled'));
+            }
           }
         }, 5_000);
 

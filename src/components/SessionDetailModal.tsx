@@ -632,15 +632,11 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
 
     const existingNames = new Set(videosRef.current.map(v => v.name));
 
-    // Pre-read all file contents into memory BEFORE any await.
-    // On iOS Safari, File objects from a FileList become inaccessible after the
-    // first async suspension, so reads on files[1..n] fail with "invalid state".
-    type FileEntry = { name: string; blob: Blob; objectUrl: string };
-    const fileEntries: FileEntry[] = files.map(f => ({
-      name: f.name,
-      blob: f.slice(0),   // Blob copy fully owned by JS
-      objectUrl: URL.createObjectURL(f),
-    }));
+    // OJO: aquí NO se leen los bytes todavía. Leer los de todos los archivos de una vez
+    // (9 clips de 60-80 MB = medio giga en RAM) hace que el navegador del celular mate la
+    // pestaña. Cada archivo se lee justo antes de su propia subida, más abajo.
+    type FileEntry = { name: string; file: File };
+    const fileEntries: FileEntry[] = files.map(f => ({ name: f.name, file: f }));
 
     // Initialize queue — duplicates already marked as skipped
     const queue: UploadItem[] = fileEntries.map(fe => ({
@@ -690,10 +686,25 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     for (let i = 0; i < fileEntries.length; i++) {
       if (queue[i].status === 'skipped') continue;
 
-      const { name, blob, objectUrl } = fileEntries[i];
+      const { name, file } = fileEntries[i];
       updateItem(i, { status: 'uploading', progress: 0 });
 
+      let objectUrl = '';
       try {
+        // Se leen los bytes AQUÍ, justo antes de subir este archivo. Antes se hacía f.slice(0)
+        // creyendo que copiaba el archivo, pero slice() es perezoso: devuelve una vista que sigue
+        // apuntando al archivo original. Cuando el navegador del celular invalida esa referencia
+        // (pasa con los content:// de Android y con los File de iOS tras la primera suspensión),
+        // la subida arrancaba y no podía leer nada: se quedaba en 0% y moría. Con arrayBuffer los
+        // bytes quedan realmente en memoria, y solo los de UN archivo a la vez.
+        let blob: Blob;
+        try {
+          blob = new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' });
+        } catch {
+          throw new Error('No se pudo leer el archivo del dispositivo. Vuelve a seleccionarlo y súbelo de nuevo.');
+        }
+        objectUrl = URL.createObjectURL(blob);
+
         // Retry upload up to 3 times on transient network errors
         let downloadUrl = '';
         let lastUploadErr: any;
@@ -760,7 +771,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
 
         triggerMetadataExtraction(videoId, downloadUrl, name, 0);
       } catch (err: any) {
-        URL.revokeObjectURL(objectUrl);
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
         const msg = err?.code ? `${err.code}: ${err.message}` : (err?.message || 'Error desconocido');
         updateItem(i, { status: 'error', errorMsg: msg });
         summary.errors.push(name);
