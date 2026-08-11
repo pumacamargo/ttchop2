@@ -733,6 +733,19 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
         //     importa, pero depende de que la referencia siga viva durante toda la subida.
         //
         // Por eso: los chicos se leen en memoria, los grandes se suben por bloques.
+        // Sonda: leer los primeros KB del archivo antes de arrancar la subida. Si el dispositivo
+        // no puede servirlo (por ejemplo un video que vive en la nube de Google Fotos y no está
+        // descargado en el teléfono), esta lectura falla o se cuelga, y sin la sonda la subida se
+        // queda en 0% durante minutos sin decir nada. Mejor fallar en 15s con un mensaje útil.
+        try {
+          await Promise.race([
+            file.slice(0, 65536).arrayBuffer(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('probe_timeout')), 15_000)),
+          ]);
+        } catch {
+          throw new Error('El dispositivo no pudo entregar este archivo. Si está en Google Fotos o en la nube, descárgalo al teléfono primero y vuelve a intentarlo.');
+        }
+
         const READ_INTO_MEMORY_LIMIT = 25 * 1024 * 1024;
         let blob: Blob | File;
         if (file.size <= READ_INTO_MEMORY_LIMIT) {
