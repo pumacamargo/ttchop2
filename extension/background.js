@@ -84,6 +84,8 @@ function toFirestoreFields(product) {
   };
   if (product.region) fields.region = { stringValue: product.region };
   if (product.sourceId) fields.sourceId = { stringValue: product.sourceId };
+  if (product.sourceUrl) fields.sourceUrl = { stringValue: product.sourceUrl };
+  if (product.scrapedAt) fields.scrapedAt = { stringValue: product.scrapedAt };
   return fields;
 }
 
@@ -149,10 +151,12 @@ async function updateProduct(auth, prodId, scraped) {
     modelSheetUrls: scraped.modelSheetUrls,
     region: scraped.regionCode || null,
     sourceId: scraped.sourceId || null,
+    sourceUrl: scraped.sourceUrl || null,
+    scrapedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 
-  const fieldsToUpdate = ['name', 'description', 'modelSheetUrls', 'region', 'sourceId', 'updatedAt'];
+  const fieldsToUpdate = ['name', 'description', 'modelSheetUrls', 'region', 'sourceId', 'sourceUrl', 'scrapedAt', 'updatedAt'];
   const mask = fieldsToUpdate.map(f => `updateMask.fieldPaths=${f}`).join('&');
   const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents/products/${prodId}?${mask}`;
 
@@ -195,6 +199,8 @@ async function createProduct(auth, scraped) {
     modelSheetUrls: scraped.modelSheetUrls,
     region: scraped.regionCode || null,
     sourceId: scraped.sourceId || null,
+    sourceUrl: scraped.sourceUrl || null,
+    scrapedAt: new Date().toISOString(),
     createdAt: new Date().toISOString()
   };
 

@@ -211,6 +211,192 @@ h1, h2, h3, h4, h5 {
   transform: scale(0.95);
 }
 
+/* Side Panel Navigation (hamburger menu) */
+.side-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 998;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.side-panel-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.side-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 280px;
+  max-width: 85vw;
+  background: var(--bg-base);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 999;
+  transform: translateX(-100%);
+  /* visibility keeps the closed panel out of the tab order; delayed so the slide-out still animates */
+  visibility: hidden;
+  transition: transform 0.25s ease, visibility 0s linear 0.25s;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.side-panel.open {
+  transform: translateX(0);
+  visibility: visible;
+  transition: transform 0.25s ease, visibility 0s;
+}
+
+.side-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.5rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.side-panel-logo-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--primary-glow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.side-panel-logo-badge span {
+  color: var(--primary);
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+.side-panel-wordmark {
+  font-family: var(--font-heading);
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+  background: var(--gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.side-panel-items {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.side-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 0.75rem;
+  border-radius: 10px;
+  background: none;
+  border: none;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.side-panel-item:hover:not(:disabled) {
+  background: var(--bg-card-hover);
+}
+
+.side-panel-item-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.side-panel-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-panel-item.active {
+  background: var(--primary-glow);
+  border-left-color: var(--secondary);
+  color: var(--text-primary);
+}
+
+.side-panel-item.active .side-panel-item-icon {
+  color: var(--secondary);
+}
+
+.side-panel-item:disabled,
+.side-panel-item.soon {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.side-panel-badge {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.side-panel-divider {
+  flex-shrink: 0;
+  height: 1px;
+  background: var(--border);
+  margin: 0.5rem 0.75rem;
+}
+
+.side-panel-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+.side-panel-logout:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--danger);
+}
+
+.side-panel-logout:hover:not(:disabled) .side-panel-item-icon {
+  color: var(--danger);
+}
+
+.side-panel-logout:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Inputs & Form styling */
 .form-group {
   display: flex;
@@ -416,6 +602,24 @@ h1, h2, h3, h4, h5 {
   padding-bottom: 5rem; /* Space for sticky controls */
 }
 
+.header-menu-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  transition: all 0.2s ease;
+}
+
+.header-menu-btn:hover {
+  background: var(--bg-card-hover);
+}
+
 /* Video thumbnail grid — more columns on larger screens */
 .video-thumb-grid {
   grid-template-columns: repeat(3, 1fr);
@@ -451,6 +655,18 @@ h1, h2, h3, h4, h5 {
 
 .pulsing-card {
   animation: pulse-glow 2s infinite ease-in-out;
+}
+
+/* Loading skeletons — pulsing placeholder blocks shown while a view's data is fetching */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.25; }
+}
+
+.skeleton-block {
+  background: var(--bg-input);
+  border-radius: 10px;
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
 }
 
 @keyframes spin-slow {

@@ -11,9 +11,11 @@ import {
   getDoc,
   deleteDoc,
   writeBatch,
-  arrayRemove
+  arrayRemove,
+  arrayUnion
 } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
+import type { ParsedAnalyticsOrder } from './analyticsImport';
 
 export type VideoSource = 'recorded' | 'ai_generated';
 
@@ -40,6 +42,8 @@ export interface Product {
   customBaseVideoUrls?: string[];
   region?: string; // codigo de pais de origen del producto (ej. 'jp', 'mx'), lo llena la extension al importar
   sourceId?: string; // id del producto de TikTok Shop, usado por la extension para no duplicar al re-scrapear
+  scrapedAt?: string; // ISO — cuándo la extension scrapeó este producto por última vez
+  sourceUrl?: string; // URL de TikTok Shop de donde se scrapeó
   updatedAt?: string;
   createdAt: string;
 }
@@ -101,6 +105,15 @@ export interface Render {
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+  // Analytics (Phase 5): links this render to the video the user actually published
+  // on TikTok, so sales in the TikTok Shop export can be traced back to the
+  // template/voice/language that produced it.
+  tiktokVideoId?: string;   // TikTok's Content ID, pasted by the user after publishing
+  publishedAt?: string;     // ISO timestamp of when the user linked/published the video
+  scriptTemplateId?: string;
+  voiceTemplateId?: string;
+  aiTemplateId?: string;
+  language?: string;
 }
 
 export type ScheduledRenderStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -130,6 +143,44 @@ export interface ScheduledRender {
   createdAt: string;
 }
 
+// ── Calendar Strategy (Phase 4) ────────────────────────────────────────────
+// One doc per user at calendar_strategy/{userId}: free-text posting strategy
+// the user writes, later fed to the /calendar/populate endpoint as context.
+export interface CalendarStrategy {
+  strategy: string;
+  updatedAt: string; // ISO
+}
+
+// ── Calendar Populate (Phase 4) ─────────────────────────────────────────────
+// Client-side contract for the (not-yet-implemented) POST /calendar/populate
+// endpoint — see PENDIENTES-SERVIDOR.md for the full spec the server must satisfy.
+export interface CalendarPopulateProduct {
+  id: string;
+  name: string;
+  description: string;
+  region: string;
+}
+
+export interface CalendarPopulateTemplateRef {
+  id: string;
+  type: TemplateType;
+  title: string;
+}
+
+export interface CalendarPopulateExistingJob {
+  localDate: string;
+  productId: string;
+}
+
+export interface CalendarPopulateRequest {
+  strategy: string;
+  timezone: string;
+  horizonDays: number;
+  products: CalendarPopulateProduct[];
+  templates: CalendarPopulateTemplateRef[];
+  existingJobs: CalendarPopulateExistingJob[];
+}
+
 export interface MasterVideo {
   id: string;
   userId: string;
@@ -144,6 +195,77 @@ export interface MasterVideo {
   usedCombinations: string[];
   variationsCount: number;
   createdAt: string;
+}
+
+export interface AnalyticsOrder extends ParsedAnalyticsOrder {
+  id: string; // same as compositeKey — `${orderId}_${skuId}`
+  userId: string;
+  importedAt: string;
+}
+
+// ── Brand Concept (Phase 3) ─────────────────────────────────────────────────
+// One doc per user at brand_concepts/{userId}: the channel's art direction —
+// what it's about, its niche/style, brand colors, fonts, and a moodboard of
+// reference images. Read/written directly by BrandConceptView.
+export interface BrandFont {
+  name: string;
+  url?: string;
+  storagePath?: string;
+}
+
+export interface BrandConcept {
+  description: string;
+  niche: string;
+  style: string;
+  colors: string[];
+  fonts: BrandFont[];
+  imageUrls: string[];
+  updatedAt: string; // ISO
+}
+
+// ── Reports (Phase 3) ────────────────────────────────────────────────────────
+// Client-side contract for the (not-yet-implemented) POST /reports/generate
+// endpoint — see PENDIENTES-SERVIDOR.md for the full spec the server must
+// satisfy. The LLM reads a summary of the user's strategy, brand concept,
+// aggregated sales, and renders, and writes back a markdown report.
+export interface ReportOrderSummary {
+  contentId: string;
+  gmv: number;
+  revenue: number;
+  itemsSold: number;
+  productId: string;
+  productName: string;
+  contentType: string;
+  orderType: string;
+  settled: boolean;
+  orderDate: string | null;
+}
+
+export interface ReportRenderInfo {
+  id: string;
+  productId: string;
+  productName: string;
+  type: string;
+  tiktokVideoId?: string;
+  scriptTemplateId?: string;
+  voiceTemplateId?: string;
+  aiTemplateId?: string;
+  language?: string;
+  createdAt: string;
+}
+
+export interface GenerateReportRequest {
+  strategy: string;
+  brandConcept: { description: string; niche: string; style: string } | null;
+  orders: ReportOrderSummary[];
+  renders: ReportRenderInfo[];
+  language: string;
+}
+
+export interface ReportHistoryEntry {
+  id: string;
+  generatedAt: string;
+  report: string;
 }
 
 export interface VideoVariation {
@@ -2082,11 +2204,12 @@ FINAL WRITING RULES
 
 // Documentos guardados en Firestore antes de la migración a `videos[]` todavía tienen el
 // campo viejo `bRolls[]` (sin section/source/trim). Se normalizan al leerlos para no romper la UI.
+//
+// IMPORTANTE: el backfill de scrapedAt/sourceUrl (más abajo) corre para TODOS los documentos,
+// migrados y legacy — por eso ya no hay un early-return aquí. Un early-return dejaría a los
+// documentos migrados (la mayoría en producción) sin pasar por el backfill.
 function normalizeProduct(raw: any): Product {
-  if (raw.videos) return raw as Product;
-
-  const legacyBRolls = raw.bRolls || [];
-  const videos: ProductVideo[] = legacyBRolls.map((b: any) => ({
+  const videos: ProductVideo[] = raw.videos ?? (raw.bRolls || []).map((b: any) => ({
     id: b.id,
     name: b.name,
     downloadUrl: b.downloadUrl,
@@ -2099,7 +2222,22 @@ function normalizeProduct(raw: any): Product {
     createdAt: b.createdAt
   }));
 
-  return { ...raw, videos } as Product;
+  // Backfill scrapedAt: ~70 productos en producción no lo tienen. Si se deja vacío, TODOS
+  // mostrarían la alerta de "re-scrapear" al mismo tiempo (ruido inútil) — usamos la fecha de
+  // creación/actualización como el mejor proxy disponible de cuándo se scrapeó.
+  const scrapedAt: string | undefined = raw.scrapedAt ?? raw.updatedAt ?? raw.createdAt;
+
+  // Backfill sourceUrl: se puede derivar de region + sourceId si el documento no lo trae.
+  const sourceUrl: string | undefined = raw.sourceUrl ?? (
+    raw.region && raw.sourceId ? `https://shop.tiktok.com/${raw.region}/pdp/${raw.sourceId}` : undefined
+  );
+
+  return {
+    ...raw,
+    videos,
+    ...(scrapedAt !== undefined && { scrapedAt }),
+    ...(sourceUrl !== undefined && { sourceUrl }),
+  } as Product;
 }
 
 // Old types: 'script' → 'collage', 'ai_prompt' → 'aiGen'. 'voice' stays 'voice'. Docs without type default to 'collage'.
@@ -2118,17 +2256,8 @@ function normalizeTemplate(raw: any): Template {
 
 const TTCHOP_SERVER_URL = 'https://ttchop-server.lemonsushi.com';
 
-function getAppMode(): 'prod' | 'test' | 'server' {
-  const m = localStorage.getItem('ttchop_mode');
-  if (m === 'prod' || m === 'test' || m === 'server') return m;
-  return localStorage.getItem('ttchop_test_mode') === 'true' ? 'test' : 'prod';
-}
-
-function resolveWebhookUrl(n8nProdName: string, serverPath: string): string {
-  const mode = getAppMode();
-  if (mode === 'server') return TTCHOP_SERVER_URL + serverPath;
-  const base = 'https://flows.lemonsushi.com';
-  return mode === 'test' ? `${base}/webhook-test/${n8nProdName}` : `${base}/webhook/${n8nProdName}`;
+function resolveWebhookUrl(_n8nProdName: string, serverPath: string): string {
+  return TTCHOP_SERVER_URL + serverPath;
 }
 
 class DatabaseService {
@@ -2579,7 +2708,7 @@ class DatabaseService {
   async createMasterVideoFromWebhook(
     productId: string,
     templateId: string,
-    extraNotes: string,
+    _extraNotes: string,
     language: string,
     finalPrompt: string,
     videoProvider: string,
@@ -2601,21 +2730,12 @@ class DatabaseService {
 
     const webhookUrl = resolveWebhookUrl('ttchop_aiGen_videoGen', '/ai/generate');
 
-    const payload = getAppMode() === 'server'
-      ? {
-          prompt: finalPrompt,
-          imageUrls: product.modelSheetUrls,
-          model: videoProvider.toLowerCase() === 'veo3' ? 'veo3' : 'seedance',
-          aspectRatio: '9:16',
-        }
-      : {
-          prompt: finalPrompt,
-          productImages: product.modelSheetUrls,
-          templateReferenceVideo: template.referenceVideoUrl || '',
-          language,
-          extraNotes,
-          videoProvider,
-        };
+    const payload = {
+      prompt: finalPrompt,
+      imageUrls: product.modelSheetUrls,
+      model: videoProvider.toLowerCase() === 'veo3' ? 'veo3' : 'seedance',
+      aspectRatio: '9:16',
+    };
 
     try {
       const response = await fetch(webhookUrl, {
@@ -2625,11 +2745,8 @@ class DatabaseService {
       });
 
       if (!response.ok) {
-        if (getAppMode() === 'server') {
-          const errBody = await response.json().catch(() => ({}));
-          throw new Error(errBody.error || `Webhook responded with status ${response.status}`);
-        }
-        throw new Error(`Webhook responded with status ${response.status}`);
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.error || `Webhook responded with status ${response.status}`);
       }
 
       const data = await response.json();
@@ -2650,6 +2767,8 @@ class DatabaseService {
         status: 'pending',
         productId,
         productName,
+        aiTemplateId: templateId,
+        language,
       }, taskId);
 
       onProgress("Sent! Tracking in Renders.");
@@ -2847,38 +2966,23 @@ class DatabaseService {
       status: 'pending',
       productId,
       productName: product.name,
+      scriptTemplateId: collageTemplateId || undefined,
+      voiceTemplateId: voiceId || undefined,
+      language,
     }, renderId);
 
     onProgress("Sending to n8n...");
 
     const webhookUrl = resolveWebhookUrl('ttchop_collage_CreateCollage', '/collage/create');
 
-    const isServerMode = getAppMode() === 'server';
-    const sessionsPayload = isServerMode
-      ? selectedSessions.map(s => ({
-          id: s.id,
-          videos: s.videos.map(c => ({
-            id: c.id,
-            downloadUrl: c.downloadUrl,
-            duration: c.duration,
-          })),
-        }))
-      : selectedSessions.map(s => ({
-          id: s.id,
-          name: s.name,
-          clips: s.videos.map(c => ({
-            id: c.id,
-            name: c.name,
-            url: c.downloadUrl,
-            duration: c.duration,
-            trimStart: c.trimStart,
-            trimEnd: c.trimEnd,
-            section: (c as any).section ?? null,
-            source: c.source,
-            metadataStatus: c.metadataStatus ?? null,
-            aiMetadata: c.aiMetadata ?? null,
-          })),
-        }));
+    const sessionsPayload = selectedSessions.map(s => ({
+      id: s.id,
+      videos: s.videos.map(c => ({
+        id: c.id,
+        downloadUrl: c.downloadUrl,
+        duration: c.duration,
+      })),
+    }));
 
     const payload = {
       renderId,
@@ -2938,6 +3042,15 @@ class DatabaseService {
 
   async updateRender(id: string, data: Partial<Render>): Promise<void> {
     await updateDoc(doc(firestore, 'renders', id), { ...data, updatedAt: new Date().toISOString() });
+  }
+
+  /** Links a render to the TikTok video it was published as, so Analytics can match sales back to it. */
+  async linkRenderToTikTok(id: string, tiktokVideoId: string): Promise<void> {
+    await updateDoc(doc(firestore, 'renders', id), {
+      tiktokVideoId,
+      publishedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   async deleteRender(id: string): Promise<void> {
@@ -3152,6 +3265,188 @@ class DatabaseService {
     const user = auth.currentUser;
     if (!user) return;
     await setDoc(doc(firestore, 'user_prefs', user.uid), { [key]: value }, { merge: true });
+  }
+
+  // ── Calendar Strategy ────────────────────────────────────────────────────
+
+  async getCalendarStrategy(): Promise<CalendarStrategy | null> {
+    const user = auth.currentUser;
+    if (!user) return null;
+    const snap = await getDoc(doc(firestore, 'calendar_strategy', user.uid));
+    return snap.exists() ? (snap.data() as CalendarStrategy) : null;
+  }
+
+  async saveCalendarStrategy(strategyText: string): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const payload: CalendarStrategy = { strategy: strategyText, updatedAt: new Date().toISOString() };
+    await setDoc(doc(firestore, 'calendar_strategy', user.uid), payload);
+  }
+
+  // ── Calendar Populate: LLM-proposed plan (server endpoint not implemented yet) ──
+  // Throws on network failure or non-OK response; the caller (CalendarStrategyPanel)
+  // is responsible for validating the parsed JSON shape before trusting it, and for
+  // presenting a single friendly "not available yet" message for any failure mode.
+
+  async populateCalendar(payload: CalendarPopulateRequest): Promise<unknown> {
+    const webhookUrl = resolveWebhookUrl('ttchop_calendar_populate', '/calendar/populate');
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(`Calendar populate endpoint responded with status ${response.status}`);
+    }
+    return response.json();
+  }
+
+  // ── Analytics: TikTok Shop order import ──────────────────────────────────
+  // One document per order line under analytics_orders/{userId}/orders/{orderId}_{skuId}.
+  // The composite id makes re-importing the same file idempotent (setDoc overwrites
+  // the same docs instead of duplicating) and keeps every document well under the
+  // 1MB Firestore limit regardless of export size.
+
+  async getAnalyticsOrders(): Promise<AnalyticsOrder[]> {
+    const user = auth.currentUser;
+    if (!user) return [];
+    const snap = await getDocs(collection(firestore, 'analytics_orders', user.uid, 'orders'));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as AnalyticsOrder));
+  }
+
+  async importAnalyticsOrders(orders: ParsedAnalyticsOrder[]): Promise<{ newCount: number; updatedCount: number }> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+
+    const existingKeys = new Set((await this.getAnalyticsOrders()).map(o => o.id));
+    const now = new Date().toISOString();
+    let newCount = 0;
+    let updatedCount = 0;
+
+    const BATCH_LIMIT = 500;
+    for (let i = 0; i < orders.length; i += BATCH_LIMIT) {
+      const chunk = orders.slice(i, i + BATCH_LIMIT);
+      const batch = writeBatch(firestore);
+      chunk.forEach(order => {
+        const ref = doc(firestore, 'analytics_orders', user.uid, 'orders', order.compositeKey);
+        batch.set(ref, { ...order, id: order.compositeKey, userId: user.uid, importedAt: now });
+        if (existingKeys.has(order.compositeKey)) updatedCount++; else newCount++;
+      });
+      await batch.commit();
+    }
+
+    return { newCount, updatedCount };
+  }
+
+  // ── Brand Concept ─────────────────────────────────────────────────────────
+
+  async getBrandConcept(): Promise<BrandConcept | null> {
+    const user = auth.currentUser;
+    if (!user) return null;
+    const snap = await getDoc(doc(firestore, 'brand_concepts', user.uid));
+    return snap.exists() ? (snap.data() as BrandConcept) : null;
+  }
+
+  async saveBrandConcept(data: { description: string; niche: string; style: string; colors: string[] }): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    // merge: true so this text/color save never clobbers fonts/imageUrls managed by the upload methods below
+    await setDoc(doc(firestore, 'brand_concepts', user.uid), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
+  }
+
+  async uploadBrandImage(file: File): Promise<string> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const path = `users/${user.uid}/brand/images/${Date.now()}_${file.name}`;
+    const fileRef = ref(storage, path);
+    await uploadBytes(fileRef, file);
+    const url = await getDownloadURL(fileRef);
+    await setDoc(doc(firestore, 'brand_concepts', user.uid), { imageUrls: arrayUnion(url), updatedAt: new Date().toISOString() }, { merge: true });
+    return url;
+  }
+
+  async deleteBrandImage(url: string): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    try {
+      // ref() accepts an https download URL directly, resolving to the same Storage object
+      await deleteObject(ref(storage, url));
+    } catch (err) {
+      console.error(err); // object may already be gone from Storage; still detach it from Firestore below
+    }
+    await updateDoc(doc(firestore, 'brand_concepts', user.uid), { imageUrls: arrayRemove(url), updatedAt: new Date().toISOString() });
+  }
+
+  async uploadBrandFont(file: File): Promise<BrandFont> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const path = `users/${user.uid}/brand/fonts/${Date.now()}_${file.name}`;
+    const fileRef = ref(storage, path);
+    await uploadBytes(fileRef, file);
+    const url = await getDownloadURL(fileRef);
+    const font: BrandFont = { name: file.name, url, storagePath: path };
+    await setDoc(doc(firestore, 'brand_concepts', user.uid), { fonts: arrayUnion(font), updatedAt: new Date().toISOString() }, { merge: true });
+    return font;
+  }
+
+  async deleteBrandFont(font: BrandFont): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    if (font.storagePath) {
+      try {
+        await deleteObject(ref(storage, font.storagePath));
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    await updateDoc(doc(firestore, 'brand_concepts', user.uid), { fonts: arrayRemove(font), updatedAt: new Date().toISOString() });
+  }
+
+  // ── Reports ────────────────────────────────────────────────────────────────
+  // The /reports/generate endpoint doesn't exist on the server yet — see
+  // PENDIENTES-SERVIDOR.md. Throws on network failure, non-OK response, or an
+  // unexpected JSON shape; the caller (ReportsView) shows one friendly
+  // "not available yet" message with retry for any failure mode.
+
+  async generateReport(payload: GenerateReportRequest): Promise<string> {
+    const webhookUrl = resolveWebhookUrl('ttchop_reports_generate', '/reports/generate');
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(`Reports endpoint responded with status ${response.status}`);
+    }
+    const data: unknown = await response.json();
+    if (!data || typeof data !== 'object' || typeof (data as Record<string, unknown>).report !== 'string') {
+      throw new Error('Unexpected /reports/generate response shape');
+    }
+    return (data as { report: string }).report;
+  }
+
+  async getReportHistory(): Promise<ReportHistoryEntry[]> {
+    const user = auth.currentUser;
+    if (!user) return [];
+    const snap = await getDocs(collection(firestore, 'reports', user.uid, 'history'));
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as ReportHistoryEntry))
+      .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+  }
+
+  async saveReportToHistory(report: string): Promise<ReportHistoryEntry> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const id = `report_${Date.now()}`;
+    const generatedAt = new Date().toISOString();
+    await setDoc(doc(firestore, 'reports', user.uid, 'history', id), { generatedAt, report });
+    return { id, generatedAt, report };
+  }
+
+  async deleteReportFromHistory(id: string): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    await deleteDoc(doc(firestore, 'reports', user.uid, 'history', id));
   }
 }
 

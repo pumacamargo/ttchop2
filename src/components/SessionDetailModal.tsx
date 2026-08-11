@@ -1,12 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { db, REGION_LABELS } from '../services/databaseService';
 import type { Product, Session, SessionVideo } from '../services/databaseService';
-import { ArrowLeft, Trash2, RefreshCw, UploadCloud, Scissors, Play, Pause, Volume2, VolumeX } from 'lucide-react';
+import { ArrowLeft, Trash2, RefreshCw, UploadCloud, Scissors, Play, Pause, Volume2, VolumeX, Edit2, Check, X as XIcon } from 'lucide-react';
+import { useT } from '../context/LanguageContext';
 
 interface SessionDetailModalProps {
   session: Session;
   onClose: () => void;
   onDeleted: () => void;
+  /**
+   * When set, this modal is being opened from inside a product's Clips tab rather than the
+   * standalone Clips nav. Session.productIds is an array — a session can be linked to several
+   * products — so "delete" here must not destroy a session another product still relies on.
+   * See the delete/unlink decision next to handleDeleteOrUnlink below.
+   */
+  scopedProductId?: string;
 }
 
 interface VideoMetadata {
@@ -516,7 +524,8 @@ const VideoCard: React.FC<{
   );
 };
 
-export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session, onClose, onDeleted }) => {
+export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session, onClose, onDeleted, scopedProductId }) => {
+  const t = useT();
   const [videos, setVideos] = useState<SessionVideo[]>(session.videos);
   const videosRef = useRef<SessionVideo[]>(session.videos);
   const [productIds, setProductIds] = useState<string[]>(session.productIds);
@@ -527,6 +536,18 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
   const [isDragging, setIsDragging] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Rename
+  const [currentName, setCurrentName] = useState(session.name);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(session.name);
+  const [isRenaming, setIsRenaming] = useState(false);
+
+  // Deleting a session linked to other products would silently break those products' Clips
+  // tab, so from inside a product we only hard-delete when this product is the session's last
+  // link; otherwise we just unlink this product (arrayRemove), mirroring deleteProduct's own
+  // "unlink, never delete" rule for the inverse relationship.
+  const willOnlyUnlink = Boolean(scopedProductId) && productIds.filter(id => id !== scopedProductId).length > 0;
 
   // Upload queue state
   type UploadStatus = 'waiting' | 'uploading' | 'done' | 'error' | 'skipped';
@@ -748,15 +769,42 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     persistVideos(videos.map(v => (v.id === id ? { ...v, trimStart, trimEnd } : v)));
   };
 
-  const handleDeleteSession = async () => {
+  const handleRename = async () => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed || trimmed === currentName) {
+      setIsEditingName(false);
+      setNameDraft(currentName);
+      return;
+    }
+    setIsRenaming(true);
+    setError('');
+    try {
+      await db.updateSession(session.id, { name: trimmed });
+      setCurrentName(trimmed);
+      setIsEditingName(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      setError(t.rename_session_failed + msg);
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const handleDeleteOrUnlink = async () => {
     setIsDeleting(true);
     setError('');
 
     try {
-      await db.deleteSession(session.id);
+      if (willOnlyUnlink && scopedProductId) {
+        const updated = productIds.filter(id => id !== scopedProductId);
+        await db.updateSession(session.id, { productIds: updated });
+      } else {
+        await db.deleteSession(session.id);
+      }
       onDeleted();
-    } catch (err: any) {
-      setError('Failed to delete session: ' + (err.message || ''));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      setError((willOnlyUnlink ? t.remove_from_product_failed : t.delete_session_failed) + msg);
       setIsDeleting(false);
     }
   };
@@ -764,14 +812,56 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
   return (
     <>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
         <button
           onClick={onClose}
-          style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
+          aria-label={t.cancel}
+          style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0, minWidth: '44px', minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
         >
           <ArrowLeft size={24} />
         </button>
-        <h2 style={{ fontSize: '1.25rem', margin: 0, lineHeight: 1.3 }}>{session.name}</h2>
+        {isEditingName ? (
+          <div style={{ flex: 1, display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+            <input
+              type="text"
+              className="form-input"
+              value={nameDraft}
+              onChange={e => setNameDraft(e.target.value)}
+              disabled={isRenaming}
+              autoFocus
+              aria-label={t.session_name}
+              style={{ flex: 1, fontSize: '1rem', padding: '0.4rem 0.6rem' }}
+            />
+            <button
+              onClick={handleRename}
+              disabled={isRenaming}
+              aria-label={t.save}
+              style={{ background: 'none', border: 'none', color: 'var(--success)', cursor: isRenaming ? 'default' : 'pointer', padding: 0, minWidth: '44px', minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Check size={20} />
+            </button>
+            <button
+              onClick={() => { setIsEditingName(false); setNameDraft(currentName); }}
+              disabled={isRenaming}
+              aria-label={t.cancel}
+              style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: isRenaming ? 'default' : 'pointer', padding: 0, minWidth: '44px', minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <XIcon size={20} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <h2 style={{ fontSize: '1.25rem', margin: 0, lineHeight: 1.3, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentName}</h2>
+            <button
+              onClick={() => { setNameDraft(currentName); setIsEditingName(true); }}
+              aria-label={t.rename_session}
+              title={t.rename_session}
+              style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0, minWidth: '44px', minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+            >
+              <Edit2 size={18} />
+            </button>
+          </>
+        )}
       </div>
 
       {error && (
@@ -980,7 +1070,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
               {groupKeys.map(key => (
                 <div key={key}>
                   <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 0.35rem' }}>
-                    {key === '__other__' ? 'Other' : REGION_LABELS[key]}
+                    {key === '__other__' ? t.other_region : REGION_LABELS[key]}
                   </p>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                     {grouped[key].map(p => {
@@ -1034,24 +1124,24 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
         })()}
       </div>
 
-      {/* Delete session */}
+      {/* Delete (or unlink, if scoped to a product with other links) session */}
       {showDeleteConfirm ? (
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button
             className="btn btn-danger"
-            onClick={handleDeleteSession}
+            onClick={handleDeleteOrUnlink}
             disabled={isDeleting}
-            style={{ flex: 1 }}
+            style={{ flex: 1, minHeight: '44px' }}
           >
-            {isDeleting ? <><RefreshCw size={16} className="loading-spinner" /> Deleting...</> : <>Confirm Delete</>}
+            {isDeleting ? <><RefreshCw size={16} className="loading-spinner" /> {t.deleting}</> : (willOnlyUnlink ? t.confirm_remove : t.confirm_delete)}
           </button>
           <button
             className="btn btn-secondary"
             onClick={() => setShowDeleteConfirm(false)}
             disabled={isDeleting}
-            style={{ flex: 1 }}
+            style={{ flex: 1, minHeight: '44px' }}
           >
-            Cancel
+            {t.cancel}
           </button>
         </div>
       ) : (
@@ -1061,13 +1151,14 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
           disabled={isDeleting}
           style={{
             width: '100%',
-            background: 'rgba(239, 68, 68, 0.1)',
+            minHeight: '44px',
+            background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
             color: 'var(--danger)',
             border: '1px solid var(--danger)',
             cursor: isDeleting ? 'default' : 'pointer'
           }}
         >
-          <Trash2 size={16} /> Delete Session
+          <Trash2 size={16} /> {willOnlyUnlink ? t.remove_from_product : t.delete_session_label}
         </button>
       )}
     </>

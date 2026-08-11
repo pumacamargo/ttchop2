@@ -22,6 +22,22 @@
         "source": "**",
         "destination": "/index.html"
       }
+    ],
+    "headers": [
+      {
+        "comment": "Regla base: todo lo que no sea un asset sirve index.html vía rewrite, y ese no se debe cachear. Si se cachea, el navegador sigue pidiendo los assets del build anterior tras cada deploy. El match va contra el path pedido (ej. '/'), no contra el reescrito, por eso el patrón es amplio.",
+        "source": "**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "comment": "Los assets llevan hash en el nombre, así que cachearlos de forma permanente es seguro. Va al final porque gana la ÚLTIMA regla que matchea.",
+        "source": "/assets/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        ]
+      }
     ]
   },
   "functions": {

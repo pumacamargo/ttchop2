@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, X, Clock, Trash2, RefreshCw, Pencil, Copy, Sparkles, Scissors, Layers, Play, Share2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X, Clock, Trash2, RefreshCw, Pencil, Copy, Sparkles, Scissors, Layers, Play, Share2, Upload, Lock } from 'lucide-react';
 import { db } from '../services/databaseService';
 import type { Product, Session, Template, ScheduledRender, Render } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
+import { CalendarStrategyPanel } from './CalendarStrategyPanel';
+import { scheduledAtUTC } from '../utils/calendarTime';
 
 // ── Timezones ────────────────────────────────────────────────────────────────
 const TIMEZONES = [
@@ -19,35 +21,6 @@ function getTodayInTz(tz: string) {
   const now = new Date();
   const tzDate = toTzDate(now, tz);
   return { y: tzDate.getFullYear(), m: tzDate.getMonth(), d: tzDate.getDate() };
-}
-
-function scheduledAtUTC(dateStr: string, timeStr: string, tz: string): string {
-  // dateStr = 'YYYY-MM-DD', timeStr = 'HH:MM'
-  // Strategy: treat the input as UTC, then correct by the actual tz offset using formatToParts.
-  // This avoids parsing locale strings with new Date() which is unreliable across browsers.
-  const [y, mo, day] = dateStr.split('-').map(Number);
-  const [h, min] = timeStr.split(':').map(Number);
-
-  const guess = new Date(Date.UTC(y, mo - 1, day, h, min, 0));
-
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(guess);
-
-  const get = (type: string) => parseInt(parts.find(p => p.type === type)!.value);
-  const tzH   = get('hour') % 24; // hour12:false can return 24 for midnight
-  const tzMin = get('minute');
-  const tzDay = get('day');
-  const tzMo  = get('month');
-  const tzY   = get('year');
-
-  // How far off is our guess (in tz) from what we actually want?
-  const wantedMs = Date.UTC(y, mo - 1, day, h, min, 0);
-  const gotMs    = Date.UTC(tzY, tzMo - 1, tzDay, tzH, tzMin, 0);
-
-  return new Date(guess.getTime() + (wantedMs - gotMs)).toISOString();
 }
 
 function formatScheduledTime(isoUtc: string, tz: string): string {
@@ -91,10 +64,49 @@ const EMPTY_FORM: NewJobForm = {
   time: '09:00',
 };
 
+// ── TikTok upload (Phase 6 placeholder) ────────────────────────────────────
+// No TikTok OAuth exists yet — this only explains what's missing, it never
+// pretends to upload anything.
+function TikTokComingSoonModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
+  return (
+    <div
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.25rem',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        className="glass-card"
+        style={{ maxWidth: '360px', width: '100%', display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '1.25rem' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <Lock size={18} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+          <h4 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-primary)' }}>{t.cal_tiktok_modal_title}</h4>
+        </div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>{t.cal_tiktok_modal_body}</p>
+        <button
+          onClick={onClose}
+          className="btn btn-primary"
+          style={{ minHeight: '44px', alignSelf: 'flex-end', padding: '0 1.2rem', fontSize: '0.8rem' }}
+        >
+          {t.cal_tiktok_modal_close}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Render row inside day panel ───────────────────────────────────────────────
 function DayRenderRow({ render: r }: { render: Render }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [showTiktokModal, setShowTiktokModal] = useState(false);
 
   const statusColor = r.status === 'done' ? '#10b981' : r.status === 'failed' ? '#ef4444' : r.status === 'processing' ? '#6366f1' : '#eab308';
   const typeIcon = r.type === 'ai' ? <Sparkles size={9} /> : r.type === 'overlay' ? <Layers size={9} /> : <Scissors size={9} />;
@@ -135,9 +147,22 @@ function DayRenderRow({ render: r }: { render: Render }) {
           </button>
         </div>
       )}
+      {r.status === 'done' && r.videoUrl && (
+        <button
+          onClick={() => setShowTiktokModal(true)}
+          style={{
+            width: '100%', minHeight: '34px', padding: '4px 8px', borderRadius: 6, fontSize: '0.66rem', fontWeight: 600,
+            background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+          }}
+        >
+          <Upload size={11} /> {t.cal_tiktok_upload_button}
+        </button>
+      )}
       {expanded && r.videoUrl && (
         <video src={r.videoUrl} controls playsInline style={{ width: '100%', maxHeight: 260, objectFit: 'contain', borderRadius: 6, background: '#000' }} />
       )}
+      {showTiktokModal && <TikTokComingSoonModal onClose={() => setShowTiktokModal(false)} />}
     </div>
   );
 }
@@ -772,6 +797,17 @@ export function CalendarView() {
         </div>
         {nowStr && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'monospace', marginLeft: 'auto' }}>{nowStr}</span>}
       </div>
+
+      {/* ── Strategy & AI populate (collapsed by default) ───────────────────── */}
+      <CalendarStrategyPanel
+        tz={tz}
+        todayStr={todayStr}
+        products={products}
+        templates={templates}
+        sessions={sessions}
+        scheduled={scheduled}
+        onAccepted={loadData}
+      />
 
       {/* ── Main area: calendar + optional side panel ─────────────────────── */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: isWide && selectedDay ? 'row' : 'column' }}>

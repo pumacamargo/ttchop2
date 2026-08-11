@@ -1,20 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/databaseService';
 import type { Product, Session, Template } from '../services/databaseService';
-import { AlertTriangle, RefreshCw, Sparkles, Mic, FileText, MessageSquare, Settings, Film, Layers } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Sparkles, Mic, FileText, MessageSquare, Settings, CalendarDays, Layers } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
 
 type Stage = 'setup' | 'generating_dialogue' | 'review' | 'generating_collage' | 'done';
 
 interface VariationsMatrixViewProps {
   initialMasterVideo?: any;
-  onGoToRenders?: () => void;
-  serverMode?: boolean;
+  onGoToCalendar?: () => void;
 }
 
 const REGION_LANGUAGE: Record<string, string> = { jp: 'Japanese', mx: 'Spanish (Mexico)' };
 
-export const VariationsMatrixView: React.FC<VariationsMatrixViewProps> = ({ onGoToRenders, serverMode = false }) => {
+export const VariationsMatrixView: React.FC<VariationsMatrixViewProps> = ({ onGoToCalendar }) => {
   const t = useT();
   const [products, setProducts] = useState<Product[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -353,8 +352,8 @@ export const VariationsMatrixView: React.FC<VariationsMatrixViewProps> = ({ onGo
             </select>
           </div>
 
-          {/* Overlay checkbox — visible once dialogue is ready, only in server mode */}
-          {serverMode && stage !== 'setup' && stage !== 'generating_dialogue' && (
+          {/* Overlay checkbox — visible once dialogue is ready */}
+          {stage !== 'setup' && stage !== 'generating_dialogue' && (
             <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer' }}>
                 <input
@@ -402,9 +401,9 @@ export const VariationsMatrixView: React.FC<VariationsMatrixViewProps> = ({ onGo
             <div style={{ marginTop: '1rem', textAlign: 'center', padding: '1rem', background: 'rgba(16,185,129,0.1)', borderRadius: '8px', border: '1px solid var(--success)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <p style={{ color: 'var(--success)', fontWeight: 700, margin: 0 }}>{t.video_sent}</p>
               <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: 0, fontFamily: 'monospace' }}>{renderId}</p>
-              {onGoToRenders && (
-                <button onClick={onGoToRenders} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                  <Film size={15} /> {t.go_to_renders}
+              {onGoToCalendar && (
+                <button onClick={onGoToCalendar} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                  <CalendarDays size={15} /> {t.go_to_calendar}
                 </button>
               )}
             </div>
