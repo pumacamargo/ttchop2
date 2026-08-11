@@ -131,7 +131,8 @@ export const VariationsMatrixView: React.FC<VariationsMatrixViewProps> = ({ onGo
         dialogue,
         (step) => setCurrentStep(step),
         needsOverlay,
-        selectedOverlayTemplateId
+        selectedOverlayTemplateId,
+        selectedVoiceTemplateId
       );
       setRenderId(id);
       setStage('done');

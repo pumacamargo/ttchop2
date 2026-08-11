@@ -109,7 +109,10 @@ export const OverlaysView: React.FC<OverlaysViewProps> = ({ onGoToCalendar }) =>
         selectedProductId,
         resolvedVideoUrl,
         selectedTemplateId,
-        (step) => setCurrentStep(step)
+        (step) => setCurrentStep(step),
+        // Solo cuando la fuente es un render nuestro hay receta que heredar. Si el usuario
+        // subió un archivo suelto, el overlay nace sin metadata de generación.
+        videoSource === 'render' ? selectedRenderId : undefined
       );
       setRenderId(id);
       setStage('done');

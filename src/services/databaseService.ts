@@ -110,9 +110,19 @@ export interface Render {
   // template/voice/language that produced it.
   tiktokVideoId?: string;   // TikTok's Content ID, pasted by the user after publishing
   publishedAt?: string;     // ISO timestamp of when the user linked/published the video
-  scriptTemplateId?: string;
-  voiceTemplateId?: string;
+  // Receta de generación: todo lo que el usuario eligió para producir este video. Es lo que
+  // permite responder "¿qué template/voz/clips venden más?" al cruzar con las ventas.
+  scriptTemplateId?: string;    // template de collage
+  voiceTemplateId?: string;     // id del DOCUMENTO del template de voz (para poder mostrar su nombre)
+  voiceId?: string;             // id de la voz en ElevenLabs (lo que realmente suena)
   aiTemplateId?: string;
+  overlayTemplateId?: string;
+  sessionIds?: string[];        // qué sesiones de clips se usaron
+  model?: string;               // 'seedance' | 'veo3'
+  extraNotes?: string;
+  // Un overlay se hace SOBRE otro video. Si ese video era un render nuestro, se guarda aquí y
+  // el overlay hereda su receta; si el usuario subió un archivo suelto, no hay nada que heredar.
+  sourceRenderId?: string;
   language?: string;
 }
 
@@ -2708,7 +2718,7 @@ class DatabaseService {
   async createMasterVideoFromWebhook(
     productId: string,
     templateId: string,
-    _extraNotes: string,
+    extraNotes: string,
     language: string,
     finalPrompt: string,
     videoProvider: string,
@@ -2768,6 +2778,8 @@ class DatabaseService {
         productId,
         productName,
         aiTemplateId: templateId,
+        model: videoProvider,
+        extraNotes: extraNotes || undefined,
         language,
       }, taskId);
 
@@ -2939,7 +2951,8 @@ class DatabaseService {
     dialogue: string,
     onProgress: (status: string) => void,
     needsOverlay = false,
-    overlayTemplateId = ''
+    overlayTemplateId = '',
+    voiceTemplateId = ''
   ): Promise<string> {
     const user = auth.currentUser;
     if (!user) throw new Error("User not authenticated");
@@ -2967,7 +2980,10 @@ class DatabaseService {
       productId,
       productName: product.name,
       scriptTemplateId: collageTemplateId || undefined,
-      voiceTemplateId: voiceId || undefined,
+      voiceTemplateId: voiceTemplateId || undefined,
+      voiceId: voiceId || undefined,
+      overlayTemplateId: needsOverlay ? (overlayTemplateId || undefined) : undefined,
+      sessionIds,
       language,
     }, renderId);
 
@@ -3101,7 +3117,8 @@ class DatabaseService {
     productId: string,
     videoUrl: string,
     overlayTemplateId: string,
-    onProgress: (status: string) => void
+    onProgress: (status: string) => void,
+    sourceRenderId?: string
   ): Promise<string> {
     const user = auth.currentUser;
     if (!user) throw new Error('User not authenticated');
@@ -3116,6 +3133,26 @@ class DatabaseService {
 
     const overlayTemplate = templates.find(t => t.id === overlayTemplateId) ?? null;
 
+    // Un overlay se aplica sobre un video que ya existe. Si ese video fue un render nuestro,
+    // hereda su receta para que el análisis de ventas siga funcionando: el overlay es el video
+    // que finalmente se publica, así que sin heredar se perdería con qué template y voz se hizo.
+    // Si el usuario subió un archivo suelto no hay nada que heredar y se queda sin esa metadata.
+    let inherited: Partial<Render> = {};
+    if (sourceRenderId) {
+      const source = (await this.getRenders()).find(r => r.id === sourceRenderId);
+      if (source) {
+        inherited = {
+          scriptTemplateId: source.scriptTemplateId,
+          voiceTemplateId: source.voiceTemplateId,
+          voiceId: source.voiceId,
+          aiTemplateId: source.aiTemplateId,
+          sessionIds: source.sessionIds,
+          model: source.model,
+          language: source.language,
+        };
+      }
+    }
+
     onProgress('Creating render entry...');
     const renderId = `render_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     await this.createRender({
@@ -3123,6 +3160,9 @@ class DatabaseService {
       status: 'pending',
       productId,
       productName: product.name,
+      overlayTemplateId: overlayTemplateId || undefined,
+      ...(sourceRenderId && { sourceRenderId }),
+      ...inherited,
     }, renderId);
 
     onProgress('Sending to n8n...');

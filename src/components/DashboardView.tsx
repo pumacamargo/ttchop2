@@ -9,7 +9,7 @@ import {
   Package, Video, LayoutTemplate, Scissors, Sparkles, Info,
 } from 'lucide-react';
 import { db } from '../services/databaseService';
-import type { AnalyticsOrder, Render } from '../services/databaseService';
+import type { AnalyticsOrder, Render, Template } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import type { Translations } from '../i18n';
 import {
@@ -17,6 +17,7 @@ import {
   filterByPeriod, filterByDateRange, filterRendersByPeriod, getPreviousPeriodRange,
   formatCurrency, computeOrderMetrics, computeDelta, aggregateByProduct, buildVideoRevenue,
   buildTopTemplate, buildRevenueBuckets, bucketGranularityForPeriod, formatBucketLabel,
+  templateNameResolver,
 } from '../utils/analytics';
 import { useCurrencySelection } from '../hooks/useCurrencySelection';
 import { SectionCard, PeriodSelector, CurrencySelector } from './shared/AnalyticsUI';
@@ -241,6 +242,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
 
   const [orders, setOrders] = useState<AnalyticsOrder[]>([]);
   const [renders, setRenders] = useState<Render[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [period, setPeriod] = useState<Period>('week');
@@ -255,10 +257,13 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
     setLoading(true);
     setLoadError('');
     try {
-      const [orderRows, renderRows] = await Promise.all([db.getAnalyticsOrders(), db.getRenders()]);
+      const [orderRows, renderRows, templateRows] = await Promise.all([
+        db.getAnalyticsOrders(), db.getRenders(), db.getTemplates(),
+      ]);
       if (!mountedRef.current) return;
       setOrders(orderRows);
       setRenders(renderRows);
+      setTemplates(templateRows);
     } catch (err) {
       console.error(err);
       if (mountedRef.current) setLoadError(t.dashboard_error_load);
@@ -307,6 +312,8 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
 
   const periodRenders = useMemo(() => filterRendersByPeriod(renders, period, now), [renders, period, now]);
   const topTemplateEntry = useMemo(() => buildTopTemplate(periodRenders), [periodRenders]);
+  // Los renders guardan ids; el usuario necesita ver el nombre del template, no `tpl_1723849...`
+  const templateName = useMemo(() => templateNameResolver(templates), [templates]);
 
   const hasData = orders.length > 0;
 
@@ -433,15 +440,15 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '0.1rem' }}>
                           {topVideoEntry.render.scriptTemplateId && (
                             <span style={{ fontSize: '0.63rem', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                              <Scissors size={9} /> {topVideoEntry.render.scriptTemplateId}
+                              <Scissors size={9} /> {templateName(topVideoEntry.render.scriptTemplateId)}
                             </span>
                           )}
                           {topVideoEntry.render.voiceTemplateId && (
-                            <span style={{ fontSize: '0.63rem', color: 'var(--text-secondary)' }}>· {topVideoEntry.render.voiceTemplateId}</span>
+                            <span style={{ fontSize: '0.63rem', color: 'var(--text-secondary)' }}>· {templateName(topVideoEntry.render.voiceTemplateId)}</span>
                           )}
                           {topVideoEntry.render.aiTemplateId && (
                             <span style={{ fontSize: '0.63rem', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                              <Sparkles size={9} /> {topVideoEntry.render.aiTemplateId}
+                              <Sparkles size={9} /> {templateName(topVideoEntry.render.aiTemplateId)}
                             </span>
                           )}
                         </div>
@@ -496,11 +503,11 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
                                   {v.render.scriptTemplateId && (
                                     <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                                      <Scissors size={8} /> {v.render.scriptTemplateId}
+                                      <Scissors size={8} /> {templateName(v.render.scriptTemplateId)}
                                     </span>
                                   )}
                                   {v.render.voiceTemplateId && (
-                                    <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>· {v.render.voiceTemplateId}</span>
+                                    <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>· {templateName(v.render.voiceTemplateId)}</span>
                                   )}
                                 </div>
                               ) : (

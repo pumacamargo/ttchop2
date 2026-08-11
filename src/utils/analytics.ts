@@ -287,3 +287,13 @@ export function buildRevenueBuckets(orders: AnalyticsOrder[], period: Period, no
   });
   return trimmed;
 }
+
+/**
+ * Resuelve un id de template a su título. Las vistas guardan ids en los renders, pero mostrar
+ * `tpl_1723849...` no le dice nada al usuario: necesita ver "Announcer" o el nombre que le puso.
+ * Si el template fue borrado, cae al id para no dejar el hueco en blanco.
+ */
+export function templateNameResolver(templates: { id: string; title: string }[]) {
+  const byId = new Map(templates.map(t => [t.id, t.title]));
+  return (id: string | undefined): string | undefined => id ? (byId.get(id) ?? id) : undefined;
+}
