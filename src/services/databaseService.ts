@@ -2279,6 +2279,16 @@ function stripUndefined<T extends object>(data: T): Partial<T> {
   return Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
+/**
+ * Proyecto de Firebase al que ttchop-server debe escribir el resultado del render.
+ *
+ * El servidor atiende a más de una app y, por defecto, escribe siempre a la base de `ttchop`.
+ * Sin este dato los renders lanzados desde ttchop2 se completaban en el servidor pero el
+ * documento se actualizaba en el proyecto equivocado: el calendario se quedaba en "en proceso"
+ * para siempre y quedaba un huérfano en la base de producción.
+ */
+const FIREBASE_PROJECT_ID = import.meta.env.VITE_FIREBASE_PROJECT_ID as string;
+
 const TTCHOP_SERVER_URL = 'https://ttchop-server.lemonsushi.com';
 const N8N_WEBHOOK_BASE = 'https://flows.lemonsushi.com/webhook';
 
@@ -2778,6 +2788,7 @@ class DatabaseService {
       imageUrls: product.modelSheetUrls,
       model: videoProvider.toLowerCase() === 'veo3' ? 'veo3' : 'seedance',
       aspectRatio: '9:16',
+      projectId: FIREBASE_PROJECT_ID,
     };
 
     try {
@@ -3035,6 +3046,7 @@ class DatabaseService {
 
     const payload = {
       renderId,
+      projectId: FIREBASE_PROJECT_ID,
       product: {
         id: product.id,
         name: product.name,
@@ -3204,6 +3216,7 @@ class DatabaseService {
 
     const payload = {
       renderId,
+      projectId: FIREBASE_PROJECT_ID,
       product: {
         id: product.id,
         name: product.name,

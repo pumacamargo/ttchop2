@@ -243,3 +243,39 @@ Agregar `https://ttchop2.web.app` a la lista de orígenes permitidos en la confi
 
 No hay nada que arreglar del lado del cliente: el navegador bloquea la respuesta antes de que el
 código de la app pueda verla.
+
+---
+
+## El servidor escribe el resultado al proyecto equivocado — BLOQUEA TODOS LOS RENDERS
+
+### Síntoma
+Un collage se genera correctamente en el servidor, pero en el calendario de ttchop2 se queda en
+"en proceso" para siempre.
+
+### Causa
+`ttchop-server` escribe el resultado del render (status, videoUrl) a la base de Firestore de
+**`ttchop`**, sin importar qué app lo haya llamado. Comprobado con un render lanzado desde ttchop2:
+
+```
+renders/render_1786455401713_jko6s
+  en ttchop2 → status: pending,  sin videoUrl,  updatedAt == createdAt  (nunca se tocó)
+  en ttchop  → status: done,     con videoUrl,  sin campo userId        (lo creó el servidor)
+```
+
+Dos consecuencias:
+1. Ningún render lanzado desde ttchop2 se completa nunca en su propia base.
+2. Cada render de ttchop2 deja un documento huérfano en la base de **producción** de ttchop.
+
+### Qué hay que hacer
+El cliente ya manda el proyecto destino en el payload de los tres endpoints que crean renders
+(`/collage/create`, `/overlay/create`, `/ai/generate`):
+
+```ts
+{ renderId: "...", projectId: "ttchop2", ... }
+```
+
+El servidor debe leer ese `projectId` y escribir el resultado en la Firestore de ese proyecto.
+Si el campo no viene, conviene seguir usando `ttchop` para no romper la app original.
+
+Esto implica que el servidor necesita credenciales para ambos proyectos (una service account por
+proyecto, eligiendo la instancia de Firestore según `projectId`).
