@@ -56,6 +56,34 @@ function getVideoMetadataFromUrl(objectUrl: string): Promise<VideoMetadata> {
   return Promise.race([probe, timeout]);
 }
 
+// Traduce los errores de Firebase Storage a algo que el usuario pueda accionar. El texto crudo
+// ("storage/retry-limit-exceeded: Max retry time for operation exceeded") es cierto pero no le
+// dice a nadie qué hacer, y sin eso no hay forma de distinguir un problema de red de uno de permisos.
+function describeUploadError(err: any): string {
+  const code: string = err?.code || '';
+  const raw: string = err?.message || '';
+
+  if (err?.message === 'upload_stalled') {
+    return 'La subida se quedó sin avanzar. Suele ser la conexión: intenta con WiFi o sube menos archivos a la vez.';
+  }
+  switch (code) {
+    case 'storage/retry-limit-exceeded':
+      return 'La conexión se cortó durante la subida. Intenta con WiFi, o sube este archivo solo.';
+    case 'storage/canceled':
+      return 'La subida se canceló antes de terminar.';
+    case 'storage/unauthenticated':
+      return 'Tu sesión expiró. Recarga la página y vuelve a entrar.';
+    case 'storage/unauthorized':
+      return 'No tienes permiso para subir a esta sesión.';
+    case 'storage/quota-exceeded':
+      return 'Se agotó el espacio de almacenamiento del proyecto.';
+    case 'storage/server-file-wrong-size':
+      return 'El archivo llegó incompleto al servidor. Vuelve a intentarlo.';
+    default:
+      return code ? `${code}: ${raw}` : (raw || 'Error desconocido');
+  }
+}
+
 function formatTime(s: number) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -558,7 +586,9 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     errorMsg?: string;
   }
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
-  const [uploadSummary, setUploadSummary] = useState<{ uploaded: string[]; skipped: string[]; errors: string[] } | null>(null);
+  // Los errores llevan su mensaje: la cola por archivo se vacía al terminar el lote, así que si
+  // el resumen solo guardara nombres se perdería el motivo y no habría nada que diagnosticar.
+  const [uploadSummary, setUploadSummary] = useState<{ uploaded: string[]; skipped: string[]; errors: { name: string; message: string }[] } | null>(null);
   const isUploading = useMemo(() => uploadQueue.some(u => u.status === 'waiting' || u.status === 'uploading'), [uploadQueue]);
 
   useEffect(() => {
@@ -646,7 +676,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     }));
     setUploadQueue(queue);
 
-    const summary = { uploaded: [] as string[], skipped: [] as string[], errors: [] as string[] };
+    const summary = { uploaded: [] as string[], skipped: [] as string[], errors: [] as { name: string; message: string }[] };
 
     // Collect skipped
     queue.forEach(item => { if (item.status === 'skipped') summary.skipped.push(item.name); });
@@ -772,9 +802,9 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
         triggerMetadataExtraction(videoId, downloadUrl, name, 0);
       } catch (err: any) {
         if (objectUrl) URL.revokeObjectURL(objectUrl);
-        const msg = err?.code ? `${err.code}: ${err.message}` : (err?.message || 'Error desconocido');
+        const msg = describeUploadError(err);
         updateItem(i, { status: 'error', errorMsg: msg });
-        summary.errors.push(name);
+        summary.errors.push({ name, message: msg });
       }
     }
 
@@ -1058,13 +1088,23 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
           {uploadSummary && (
             <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.6rem 0.75rem', fontSize: '0.78rem' }}>
               {uploadSummary.uploaded.length > 0 && (
-                <div style={{ color: '#10b981', marginBottom: '0.25rem' }}>✓ Subidos ({uploadSummary.uploaded.length}): {uploadSummary.uploaded.join(', ')}</div>
+                <div style={{ color: 'var(--success)', marginBottom: '0.25rem' }}>✓ Subidos ({uploadSummary.uploaded.length}): {uploadSummary.uploaded.join(', ')}</div>
               )}
               {uploadSummary.skipped.length > 0 && (
-                <div style={{ color: '#eab308', marginBottom: '0.25rem' }}>— Ya existían ({uploadSummary.skipped.length}): {uploadSummary.skipped.join(', ')}</div>
+                <div style={{ color: 'var(--warning)', marginBottom: '0.25rem' }}>— Ya existían ({uploadSummary.skipped.length}): {uploadSummary.skipped.join(', ')}</div>
               )}
               {uploadSummary.errors.length > 0 && (
-                <div style={{ color: '#ef4444' }}>✗ Error ({uploadSummary.errors.length}): {uploadSummary.errors.join(', ')}</div>
+                <div style={{ color: 'var(--danger)' }}>
+                  <div style={{ marginBottom: '0.35rem' }}>✗ Error ({uploadSummary.errors.length})</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    {uploadSummary.errors.map(e => (
+                      <div key={e.name} style={{ paddingLeft: '0.75rem', borderLeft: '2px solid var(--danger)' }}>
+                        <div style={{ color: 'var(--text-primary)', fontSize: '0.75rem' }}>{e.name}</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', wordBreak: 'break-word' }}>{e.message}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
               <button onClick={() => setUploadSummary(null)} style={{ marginTop: '0.4rem', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.68rem', cursor: 'pointer', padding: 0 }}>Cerrar</button>
             </div>
