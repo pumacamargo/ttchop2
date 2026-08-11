@@ -714,36 +714,51 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
         }
         if (lastUploadErr) throw lastUploadErr;
 
-        // Metadata runs in parallel with the upload; result is ready by now
-        const { duration, thumbnailBlob } = await getVideoMetadataFromUrl(objectUrl);
-        URL.revokeObjectURL(objectUrl);
-
-        const thumbnailUrl = thumbnailBlob
-          ? await db.uploadSessionThumbnail(session.id, thumbnailBlob)
-          : undefined;
-
-        updateItem(i, { status: 'done', progress: 100, errorMsg: undefined });
-
-        const newVid: SessionVideo = {
-          id: `vid_${Math.random().toString(36).substring(2, 9)}`,
+        // A partir de aquí los bytes YA están en Storage. Todo lo que sigue (leer la duración,
+        // generar y subir la miniatura) es opcional y puede fallar en un celular con un archivo
+        // grande: la pestaña se suspende, se queda sin memoria, o se corta la red. Antes esos
+        // fallos tiraban el video entero aunque la subida hubiera terminado, dejando el archivo
+        // huérfano en Storage y al usuario creyendo que "no subió". Por eso se registra PRIMERO
+        // con lo mínimo y se enriquece después.
+        const videoId = `vid_${Math.random().toString(36).substring(2, 9)}`;
+        const baseVid: SessionVideo = {
+          id: videoId,
           name,
           downloadUrl,
-          ...(thumbnailUrl && { thumbnailUrl }),
-          duration,
+          duration: 0,
           source: 'recorded',
           trimStart: 0,
-          trimEnd: duration || 0,
+          trimEnd: 0,
           createdAt: new Date().toISOString(),
           metadataStatus: 'processing' as const,
         };
-
-        // Add to session immediately, then trigger analysis
-        const merged = [...videosRef.current, newVid];
+        const merged = [...videosRef.current, baseVid];
         await db.updateSession(session.id, { videos: merged });
         applyVideos(merged);
-        triggerMetadataExtraction(newVid.id, newVid.downloadUrl, newVid.name, newVid.duration);
 
+        updateItem(i, { status: 'done', progress: 100, errorMsg: undefined });
         summary.uploaded.push(name);
+
+        // Duración y miniatura: si fallan, el clip se queda registrado igual y se puede
+        // reintentar el análisis desde la tarjeta.
+        try {
+          const { duration, thumbnailBlob } = await getVideoMetadataFromUrl(objectUrl);
+          const thumbnailUrl = thumbnailBlob
+            ? await db.uploadSessionThumbnail(session.id, thumbnailBlob)
+            : undefined;
+
+          const enriched = videosRef.current.map(v => v.id === videoId
+            ? { ...v, duration, trimEnd: duration || 0, ...(thumbnailUrl && { thumbnailUrl }) }
+            : v);
+          await db.updateSession(session.id, { videos: enriched });
+          applyVideos(enriched);
+        } catch (metaErr) {
+          console.error('No se pudo generar la miniatura o leer la duración:', metaErr);
+        } finally {
+          URL.revokeObjectURL(objectUrl);
+        }
+
+        triggerMetadataExtraction(videoId, downloadUrl, name, 0);
       } catch (err: any) {
         URL.revokeObjectURL(objectUrl);
         const msg = err?.code ? `${err.code}: ${err.message}` : (err?.message || 'Error desconocido');
