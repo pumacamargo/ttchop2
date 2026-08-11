@@ -15,6 +15,7 @@ import { EditorView } from './components/EditorView';
 import { ToolsView } from './components/ToolsView';
 import { SidePanel } from './components/SidePanel';
 import { AuthView } from './components/AuthView';
+import { TikTokCallbackView } from './components/TikTokCallbackView';
 import { useAuth } from './context/AuthContext';
 import { LanguageProvider, useT } from './context/LanguageContext';
 import { db } from './services/databaseService';
@@ -208,6 +209,12 @@ function App() {
   const [appLanguage, setAppLanguage] = React.useState(() => {
     return localStorage.getItem('ttchop_language') || 'English';
   });
+  // The OAuth callback needs a logged-in user, so it's handled here (inside the
+  // AuthProvider) instead of the path-based routing in main.tsx, which only covers
+  // pages that must work for anonymous visitors.
+  const [showTikTokCallback, setShowTikTokCallback] = React.useState(
+    () => window.location.pathname === '/auth/tiktok/callback'
+  );
 
   React.useEffect(() => {
     localStorage.setItem('ttchop_language', appLanguage);
@@ -215,7 +222,9 @@ function App() {
 
   return (
     <LanguageProvider language={appLanguage}>
-      <AppInner appLanguage={appLanguage} setAppLanguage={setAppLanguage} />
+      {showTikTokCallback
+        ? <TikTokCallbackView onDone={() => setShowTikTokCallback(false)} />
+        : <AppInner appLanguage={appLanguage} setAppLanguage={setAppLanguage} />}
     </LanguageProvider>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   LayoutDashboard,
   Package,
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
 import type { ActiveTab } from '../types/navigation';
+import { TikTokAccountsModal } from './TikTokAccountsModal';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -34,6 +35,12 @@ interface MenuItem {
 
 export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, activeTab, onNavigate, onLogout, isLoggingOut }) => {
   const t = useT();
+  const [showAccountsModal, setShowAccountsModal] = useState(false);
+
+  const handleSwitchAccount = () => {
+    onClose();
+    setShowAccountsModal(true);
+  };
 
   // Escape key closes the panel
   useEffect(() => {
@@ -114,16 +121,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, activeTab
         <div className="side-panel-divider" />
 
         <div className="side-panel-footer">
-          {/* Disabled until TikTok OAuth lands — see Phase 6 */}
           <button
             type="button"
-            className="side-panel-item soon"
-            disabled
+            className="side-panel-item"
+            onClick={handleSwitchAccount}
             aria-label={t.nav_switch_account}
           >
             <span className="side-panel-item-icon"><Repeat2 size={19} /></span>
             <span className="side-panel-item-label">{t.nav_switch_account}</span>
-            <span className="side-panel-badge">{t.nav_soon}</span>
           </button>
           <button
             type="button"
@@ -137,6 +142,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, activeTab
           </button>
         </div>
       </nav>
+
+      {showAccountsModal && <TikTokAccountsModal onClose={() => setShowAccountsModal(false)} />}
     </>
   );
 };

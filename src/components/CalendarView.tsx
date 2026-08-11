@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, Plus, X, Clock, Trash2, RefreshCw, Pencil, Copy, Sparkles, Scissors, Layers, Play, Share2, Upload, Lock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X, Clock, Trash2, RefreshCw, Pencil, Copy, Sparkles, Scissors, Layers, Play, Share2, Upload } from 'lucide-react';
 import { db } from '../services/databaseService';
 import type { Product, Session, Template, ScheduledRender, Render } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { CalendarStrategyPanel } from './CalendarStrategyPanel';
+import { TikTokUploadModal } from './TikTokUploadModal';
 import { scheduledAtUTC } from '../utils/calendarTime';
 
 // ── Timezones ────────────────────────────────────────────────────────────────
@@ -64,45 +65,8 @@ const EMPTY_FORM: NewJobForm = {
   time: '09:00',
 };
 
-// ── TikTok upload (Phase 6 placeholder) ────────────────────────────────────
-// No TikTok OAuth exists yet — this only explains what's missing, it never
-// pretends to upload anything.
-function TikTokComingSoonModal({ onClose }: { onClose: () => void }) {
-  const t = useT();
-  return (
-    <div
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.25rem',
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        className="glass-card"
-        style={{ maxWidth: '360px', width: '100%', display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '1.25rem' }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Lock size={18} style={{ color: 'var(--warning)', flexShrink: 0 }} />
-          <h4 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-primary)' }}>{t.cal_tiktok_modal_title}</h4>
-        </div>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>{t.cal_tiktok_modal_body}</p>
-        <button
-          onClick={onClose}
-          className="btn btn-primary"
-          style={{ minHeight: '44px', alignSelf: 'flex-end', padding: '0 1.2rem', fontSize: '0.8rem' }}
-        >
-          {t.cal_tiktok_modal_close}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ── Render row inside day panel ───────────────────────────────────────────────
-function DayRenderRow({ render: r }: { render: Render }) {
+function DayRenderRow({ render: r, onUploaded }: { render: Render; onUploaded: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -162,7 +126,13 @@ function DayRenderRow({ render: r }: { render: Render }) {
       {expanded && r.videoUrl && (
         <video src={r.videoUrl} controls playsInline style={{ width: '100%', maxHeight: 260, objectFit: 'contain', borderRadius: 6, background: '#000' }} />
       )}
-      {showTiktokModal && <TikTokComingSoonModal onClose={() => setShowTiktokModal(false)} />}
+      {showTiktokModal && (
+        <TikTokUploadModal
+          render={r}
+          onClose={() => setShowTiktokModal(false)}
+          onUploaded={onUploaded}
+        />
+      )}
     </div>
   );
 }
@@ -566,7 +536,7 @@ export function CalendarView() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
             {dayRenders.map(r => (
-              <DayRenderRow key={r.id} render={r} />
+              <DayRenderRow key={r.id} render={r} onUploaded={loadData} />
             ))}
           </div>
         </div>

@@ -79,6 +79,14 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // TikTok tokens (Phase 6) — only Cloud Functions touch this collection (Admin SDK
+    // bypasses these rules). The client must never read it directly: anyone holding a
+    // token could publish to that user's TikTok account from outside the app. The
+    // frontend gets the non-sensitive account list via the tiktokAccounts function.
+    match /tiktok_accounts/{docId} {
+      allow read, write: if false;
+    }
+
     // Deny all other access
     match /{document=**} {
       allow read, write: if false;

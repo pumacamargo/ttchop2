@@ -110,6 +110,10 @@ export interface Render {
   // template/voice/language that produced it.
   tiktokVideoId?: string;   // TikTok's Content ID, pasted by the user after publishing
   publishedAt?: string;     // ISO timestamp of when the user linked/published the video
+  // Phase 6: set by the tiktokUpload Cloud Function once the video lands in the user's
+  // TikTok drafts inbox (FILE_UPLOAD to /post/publish/inbox/video/init/).
+  tiktokPublishId?: string; // TikTok's publish_id for the draft upload
+  tiktokUploadedAt?: string; // ISO timestamp of when the draft upload completed
   // Receta de generación: todo lo que el usuario eligió para producir este video. Es lo que
   // permite responder "¿qué template/voz/clips venden más?" al cruzar con las ventas.
   scriptTemplateId?: string;    // template de collage

@@ -1,11 +1,249 @@
 const functions = require('firebase-functions');
+const { defineSecret } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
+const { getAuth } = require('firebase-admin/auth');
 
 initializeApp();
 const db = getFirestore();
 
 const REGION_LABELS = { jp: 'Japan', mx: 'Mexico' };
+
+// ── TikTok integration (Phase 6) ────────────────────────────────────────────
+// The client secret lives ONLY here (Secret Manager, via defineSecret) — it never
+// reaches the frontend bundle. The client key is public by design (it travels in the
+// authorize URL) so it's safe to hardcode; it must match VITE_TIKTOK_CLIENT_KEY.
+const TIKTOK_CLIENT_SECRET = defineSecret('TIKTOK_CLIENT_SECRET');
+const TIKTOK_CLIENT_KEY = 'sbaw16c6l5vcoee1i0';
+const TIKTOK_API_BASE = 'https://open.tiktokapis.com';
+const ALLOWED_ORIGINS = ['https://ttchop2.web.app', 'http://localhost:5173'];
+
+// Every TikTok function verifies the caller's Firebase ID token and derives userId from
+// it — the body/query userId is never trusted, otherwise anyone could act on someone
+// else's connected TikTok account.
+async function verifyAuth(req) {
+  const header = req.get('Authorization') || '';
+  const match = header.match(/^Bearer (.+)$/);
+  if (!match) {
+    const err = new Error('Missing Authorization header.');
+    err.statusCode = 401;
+    throw err;
+  }
+  try {
+    const decoded = await getAuth().verifyIdToken(match[1]);
+    return decoded.uid;
+  } catch (e) {
+    const err = new Error('Invalid or expired session — please sign in again.');
+    err.statusCode = 401;
+    throw err;
+  }
+}
+
+function tiktokAccountDocId(userId, openId) {
+  return `${userId}_${openId}`;
+}
+
+// TikTok's OAuth endpoint returns OAuth2-style errors ({error, error_description}); its
+// other v2 endpoints wrap everything in {data, error: {code, message}} where code is
+// the string 'ok' on success. This normalizes both shapes into a human message.
+function describeTikTokError(json) {
+  if (!json) return null;
+  if (typeof json.error === 'string') {
+    return json.error_description || json.error;
+  }
+  if (json.error && typeof json.error === 'object' && json.error.code && json.error.code !== 'ok') {
+    return json.error.message || json.error.code;
+  }
+  return null;
+}
+
+async function tiktokTokenRequest(params) {
+  const body = new URLSearchParams({
+    client_key: TIKTOK_CLIENT_KEY,
+    client_secret: TIKTOK_CLIENT_SECRET.value(),
+    ...params,
+  });
+  const res = await fetch(`${TIKTOK_API_BASE}/v2/oauth/token/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || describeTikTokError(json)) {
+    throw new Error(describeTikTokError(json) || `TikTok token request failed (${res.status}).`);
+  }
+  return json; // { access_token, expires_in, refresh_token, refresh_expires_in, open_id, scope }
+}
+
+// Returns a valid access token for this account, refreshing (and persisting the refresh)
+// if the current one is expired or about to expire.
+async function getValidAccessToken(accountSnap) {
+  const data = accountSnap.data();
+  const now = Date.now();
+  if (data.expiresAt && data.expiresAt > now + 60000) {
+    return data.accessToken;
+  }
+  if (data.refreshExpiresAt && data.refreshExpiresAt <= now) {
+    const err = new Error('Your TikTok session expired — reconnect the account.');
+    err.statusCode = 409;
+    throw err;
+  }
+  const refreshed = await tiktokTokenRequest({ grant_type: 'refresh_token', refresh_token: data.refreshToken });
+  const updated = {
+    accessToken: refreshed.access_token,
+    refreshToken: refreshed.refresh_token,
+    expiresAt: now + refreshed.expires_in * 1000,
+    refreshExpiresAt: now + refreshed.refresh_expires_in * 1000,
+    scope: refreshed.scope || data.scope,
+  };
+  await accountSnap.ref.update(updated);
+  return updated.accessToken;
+}
+
+function sendError(res, err, fallbackMessage) {
+  console.error(err);
+  res.status(err.statusCode || 500).json({ error: err.message || fallbackMessage });
+}
+
+// Exchanges an OAuth `code` for tokens, fetches the TikTok user's public profile, and
+// stores everything (including the tokens) server-side. Only non-sensitive fields are
+// returned to the client.
+exports.tiktokExchange = functions.https.onRequest(
+  { cors: ALLOWED_ORIGINS, secrets: [TIKTOK_CLIENT_SECRET] },
+  async (req, res) => {
+    if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed.' }); return; }
+    try {
+      const userId = await verifyAuth(req);
+      const { code, redirectUri } = req.body || {};
+      if (!code || !redirectUri) { res.status(400).json({ error: 'Missing code or redirectUri.' }); return; }
+
+      const tokenData = await tiktokTokenRequest({ code, grant_type: 'authorization_code', redirect_uri: redirectUri });
+      const { access_token, refresh_token, expires_in, refresh_expires_in, open_id, scope } = tokenData;
+      if (!access_token || !open_id) throw new Error('TikTok did not return a valid token.');
+
+      const userInfoRes = await fetch(`${TIKTOK_API_BASE}/v2/user/info/?fields=open_id,display_name,avatar_url`, {
+        headers: { Authorization: `Bearer ${access_token}` },
+      });
+      const userInfoJson = await userInfoRes.json().catch(() => ({}));
+      if (!userInfoRes.ok || describeTikTokError(userInfoJson)) {
+        throw new Error(describeTikTokError(userInfoJson) || 'Could not read the TikTok account profile.');
+      }
+      const info = userInfoJson.data?.user || {};
+
+      const now = Date.now();
+      const docId = tiktokAccountDocId(userId, open_id);
+      await db.collection('tiktok_accounts').doc(docId).set({
+        userId,
+        openId: open_id,
+        displayName: info.display_name || '',
+        avatarUrl: info.avatar_url || '',
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        expiresAt: now + expires_in * 1000,
+        refreshExpiresAt: now + refresh_expires_in * 1000,
+        scope: scope || '',
+        connectedAt: new Date().toISOString(),
+      }, { merge: true });
+
+      res.status(200).json({ openId: open_id, displayName: info.display_name || '', avatarUrl: info.avatar_url || '' });
+    } catch (err) {
+      sendError(res, err, 'Could not connect the TikTok account.');
+    }
+  }
+);
+
+// Returns the caller's connected TikTok accounts WITHOUT tokens — the client never
+// reads tiktok_accounts directly (Firestore rules deny it outright).
+exports.tiktokAccounts = functions.https.onRequest({ cors: ALLOWED_ORIGINS }, async (req, res) => {
+  try {
+    const userId = await verifyAuth(req);
+    const snap = await db.collection('tiktok_accounts').where('userId', '==', userId).get();
+    const accounts = snap.docs.map(d => {
+      const data = d.data();
+      return { openId: data.openId, displayName: data.displayName, avatarUrl: data.avatarUrl, connectedAt: data.connectedAt };
+    });
+    res.status(200).json({ accounts });
+  } catch (err) {
+    sendError(res, err, 'Could not load TikTok accounts.');
+  }
+});
+
+exports.tiktokDisconnect = functions.https.onRequest({ cors: ALLOWED_ORIGINS }, async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed.' }); return; }
+  try {
+    const userId = await verifyAuth(req);
+    const { openId } = req.body || {};
+    if (!openId) { res.status(400).json({ error: 'Missing openId.' }); return; }
+    await db.collection('tiktok_accounts').doc(tiktokAccountDocId(userId, openId)).delete();
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    sendError(res, err, 'Could not disconnect the TikTok account.');
+  }
+});
+
+// Downloads the render's video from Storage and uploads it to the TikTok drafts inbox
+// (FILE_UPLOAD — PULL_FROM_URL would require a verified domain, which firebasestorage.app
+// is not). Verifies the render belongs to the caller before touching anything.
+exports.tiktokUpload = functions.https.onRequest(
+  { cors: ALLOWED_ORIGINS, secrets: [TIKTOK_CLIENT_SECRET], timeoutSeconds: 300, memory: '1GiB' },
+  async (req, res) => {
+    if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed.' }); return; }
+    try {
+      const userId = await verifyAuth(req);
+      const { renderId, openId } = req.body || {};
+      if (!renderId || !openId) { res.status(400).json({ error: 'Missing renderId or openId.' }); return; }
+
+      const renderRef = db.collection('renders').doc(renderId);
+      const renderSnap = await renderRef.get();
+      if (!renderSnap.exists) { res.status(404).json({ error: 'Render not found.' }); return; }
+      const render = renderSnap.data();
+      if (render.userId !== userId) { res.status(403).json({ error: 'You do not have access to this render.' }); return; }
+      if (!render.videoUrl) { res.status(400).json({ error: 'This render has no finished video yet.' }); return; }
+
+      const accountRef = db.collection('tiktok_accounts').doc(tiktokAccountDocId(userId, openId));
+      const accountSnap = await accountRef.get();
+      if (!accountSnap.exists) { res.status(404).json({ error: 'That TikTok account is not connected.' }); return; }
+
+      const accessToken = await getValidAccessToken(accountSnap);
+
+      const videoRes = await fetch(render.videoUrl);
+      if (!videoRes.ok) throw new Error('Could not download the video from Storage.');
+      const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+      const videoSize = videoBuffer.length;
+
+      const initRes = await fetch(`${TIKTOK_API_BASE}/v2/post/publish/inbox/video/init/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' },
+        body: JSON.stringify({
+          source_info: { source: 'FILE_UPLOAD', video_size: videoSize, chunk_size: videoSize, total_chunk_count: 1 },
+        }),
+      });
+      const initJson = await initRes.json().catch(() => ({}));
+      if (!initRes.ok || describeTikTokError(initJson)) {
+        throw new Error(describeTikTokError(initJson) || 'TikTok rejected the upload request.');
+      }
+      const { publish_id, upload_url } = initJson.data || {};
+      if (!publish_id || !upload_url) throw new Error('TikTok did not return an upload URL.');
+
+      const putRes = await fetch(upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'video/mp4', 'Content-Range': `bytes 0-${videoSize - 1}/${videoSize}` },
+        body: videoBuffer,
+      });
+      if (!putRes.ok) throw new Error(`Uploading the video to TikTok failed (${putRes.status}).`);
+
+      await renderRef.update({
+        tiktokPublishId: publish_id,
+        tiktokUploadedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      res.status(200).json({ publishId: publish_id });
+    } catch (err) {
+      sendError(res, err, 'Could not upload the video to TikTok.');
+    }
+  }
+);
 
 exports.productPage = functions.https.onRequest(async (req, res) => {
   // Extract product ID from path: /p/prod_xxx
