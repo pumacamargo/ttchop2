@@ -2268,6 +2268,17 @@ function normalizeTemplate(raw: any): Template {
   return { ...raw, type } as Template;
 }
 
+/**
+ * Quita las claves con valor undefined antes de escribir a Firestore. Firestore no las ignora:
+ * rechaza la operación entera con "Unsupported field value: undefined", así que un solo campo
+ * opcional sin valor tumba la escritura completa. Los documentos con receta (renders, jobs del
+ * calendario) tienen muchos campos que solo aplican a ciertos tipos, así que se limpia de forma
+ * centralizada en vez de confiar en que cada llamador se acuerde.
+ */
+function stripUndefined<T extends object>(data: T): Partial<T> {
+  return Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
 const TTCHOP_SERVER_URL = 'https://ttchop-server.lemonsushi.com';
 const N8N_WEBHOOK_BASE = 'https://flows.lemonsushi.com/webhook';
 
@@ -3074,12 +3085,12 @@ class DatabaseService {
     if (!user) throw new Error('Not authenticated');
     const id = customId ?? `render_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = new Date().toISOString();
-    await setDoc(doc(firestore, 'renders', id), { ...data, id, userId: user.uid, createdAt: now, updatedAt: now });
+    await setDoc(doc(firestore, 'renders', id), { ...stripUndefined(data), id, userId: user.uid, createdAt: now, updatedAt: now });
     return id;
   }
 
   async updateRender(id: string, data: Partial<Render>): Promise<void> {
-    await updateDoc(doc(firestore, 'renders', id), { ...data, updatedAt: new Date().toISOString() });
+    await updateDoc(doc(firestore, 'renders', id), { ...stripUndefined(data), updatedAt: new Date().toISOString() });
   }
 
   /** Links a render to the TikTok video it was published as, so Analytics can match sales back to it. */
@@ -3301,7 +3312,7 @@ class DatabaseService {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     const docRef = await addDoc(collection(firestore, 'scheduled_renders'), {
-      ...data,
+      ...stripUndefined(data),
       userId: user.uid,
       createdAt: new Date().toISOString(),
     });
@@ -3309,7 +3320,7 @@ class DatabaseService {
   }
 
   async updateScheduledRender(id: string, data: Partial<Omit<ScheduledRender, 'id' | 'userId' | 'createdAt'>>): Promise<void> {
-    await updateDoc(doc(firestore, 'scheduled_renders', id), data);
+    await updateDoc(doc(firestore, 'scheduled_renders', id), stripUndefined(data));
   }
 
   async deleteScheduledRender(id: string): Promise<void> {
