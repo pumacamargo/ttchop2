@@ -79,6 +79,9 @@ function describeUploadError(err: any): string {
       return 'Se agotó el espacio de almacenamiento del proyecto.';
     case 'storage/server-file-wrong-size':
       return 'El archivo llegó incompleto al servidor. Vuelve a intentarlo.';
+    case 'storage/unknown':
+      // Suele ser el navegador del celular soltando la referencia al archivo a media subida.
+      return 'El dispositivo dejó de dar acceso al archivo a media subida. Vuelve a seleccionarlo y súbelo solo, sin otros archivos en la misma tanda.';
     default:
       return code ? `${code}: ${raw}` : (raw || 'Error desconocido');
   }
@@ -721,17 +724,25 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
 
       let objectUrl = '';
       try {
-        // Se leen los bytes AQUÍ, justo antes de subir este archivo. Antes se hacía f.slice(0)
-        // creyendo que copiaba el archivo, pero slice() es perezoso: devuelve una vista que sigue
-        // apuntando al archivo original. Cuando el navegador del celular invalida esa referencia
-        // (pasa con los content:// de Android y con los File de iOS tras la primera suspensión),
-        // la subida arrancaba y no podía leer nada: se quedaba en 0% y moría. Con arrayBuffer los
-        // bytes quedan realmente en memoria, y solo los de UN archivo a la vez.
-        let blob: Blob;
-        try {
-          blob = new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' });
-        } catch {
-          throw new Error('No se pudo leer el archivo del dispositivo. Vuelve a seleccionarlo y súbelo de nuevo.');
+        // Cómo se entrega el archivo a Storage, según su tamaño. Hay dos riesgos opuestos:
+        //
+        //   - Leerlo entero con arrayBuffer() lo blinda contra que el navegador invalide la
+        //     referencia al archivo del dispositivo, pero exige reservar TODO el archivo de golpe
+        //     en RAM. En celular eso revienta con archivos grandes (falló con 76 MB y 63 MB).
+        //   - Pasar el File directo deja que Firebase lo lea por bloques, así que la memoria no
+        //     importa, pero depende de que la referencia siga viva durante toda la subida.
+        //
+        // Por eso: los chicos se leen en memoria, los grandes se suben por bloques.
+        const READ_INTO_MEMORY_LIMIT = 25 * 1024 * 1024;
+        let blob: Blob | File;
+        if (file.size <= READ_INTO_MEMORY_LIMIT) {
+          try {
+            blob = new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' });
+          } catch {
+            throw new Error('No se pudo leer el archivo del dispositivo. Vuelve a seleccionarlo y súbelo de nuevo.');
+          }
+        } else {
+          blob = file;
         }
         objectUrl = URL.createObjectURL(blob);
 
