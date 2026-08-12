@@ -209,10 +209,24 @@ export const DailyPerformanceChart: React.FC<{
           else if (e.key === 'ArrowRight') { e.preventDefault(); setHoverIndex(i => Math.min(n - 1, (i ?? -1) + 1)); }
           else if (e.key === 'Escape') setHoverIndex(null);
         }}
-        style={{ position: 'relative', touchAction: 'pan-y', outline: 'none' }}
+        style={{ position: 'relative', touchAction: 'pan-y', outline: 'none', paddingLeft: '1.6rem' }}
       >
+        {/* Referencias de escala. Van en HTML y no como <text> del SVG porque el viewBox se
+            estira con preserveAspectRatio="none" y deformaría cualquier tipografía dentro. */}
+        <span style={{
+          position: 'absolute', left: 0, top: `${(PAD_TOP / VB_H) * H - 6}px`,
+          fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1,
+        }}>{maxVal.toLocaleString()}</span>
+        <span style={{
+          position: 'absolute', left: 0, top: `${(baselineY / VB_H) * H - 5}px`,
+          fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1,
+        }}>0</span>
+
         <svg viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: H, display: 'block' }} aria-hidden="true">
-          <line x1={0} y1={baselineY} x2={VB_W} y2={baselineY} stroke="var(--border)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          {/* Guía superior del máximo, tenue: da referencia sin competir con los datos */}
+          <line x1={0} y1={PAD_TOP} x2={VB_W} y2={PAD_TOP} stroke="var(--border)" strokeWidth={1} strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
+          {/* Línea del cero: sólida y más marcada que la guía, es la base de lectura */}
+          <line x1={0} y1={baselineY} x2={VB_W} y2={baselineY} stroke="var(--text-muted)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" opacity={0.55} />
           {hoverIndex !== null && (
             <line x1={hoverX} y1={PAD_TOP} x2={hoverX} y2={baselineY} stroke="var(--text-muted)" strokeWidth={1} vectorEffect="non-scaling-stroke" opacity={0.5} />
           )}
