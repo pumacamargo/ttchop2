@@ -17,7 +17,7 @@ import {
   type Period, type RevenueBucket, type BucketGranularity,
   filterByPeriod, filterByDateRange, filterRendersByPeriod, getPreviousPeriodRange,
   formatCurrency, computeOrderMetrics, computeDelta, aggregateByProduct, buildVideoRevenue,
-  buildTopTemplate, buildRevenueBuckets, bucketGranularityForPeriod, formatBucketLabel,
+  buildTopTemplate, buildRevenueBuckets, formatBucketLabel,
   templateNameResolver, filterVideoStatsByPeriod, filterVideoStatsByDateRange, computeVideoStatsMetrics,
 } from '../utils/analytics';
 import { useCurrencySelection } from '../hooks/useCurrencySelection';
@@ -327,8 +327,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   const previousViewsMetrics = useMemo(() => computeVideoStatsMetrics(previousVideoStats), [previousVideoStats]);
   const viewsDelta = previousVideoStats.length > 0 ? computeDelta(currentViewsMetrics.totalViews, previousViewsMetrics.totalViews) : null;
 
-  const granularity = bucketGranularityForPeriod(period);
-  const buckets = useMemo(() => buildRevenueBuckets(currencyOrders, period, now), [currencyOrders, period, now]);
+  const { granularity, buckets } = useMemo(() => buildRevenueBuckets(currencyOrders, period, now), [currencyOrders, period, now]);
 
   const topProductEntry = useMemo(() => {
     const list = aggregateByProduct(periodOrders).sort((a, b) => b.revenue - a.revenue);

@@ -164,6 +164,17 @@ export function computeDelta(curr: number, prev: number): number | null {
   return (curr - prev) / prev;
 }
 
+/**
+ * Comisión como fracción del GMV (0.05 = 5%). Deliberadamente `revenueTotal / gmvTotal` —
+ * exactamente los dos números que ya se muestran en las tarjetas de GMV y Comisión — para que
+ * el porcentaje cuadre con lo que el usuario tiene a la vista. Un denominador distinto (p.ej.
+ * el GMV de solo las órdenes liquidadas) daría un número que no reconcilia con esas dos
+ * tarjetas y confundiría más de lo que aclara. 0 cuando `gmvTotal` es 0, nunca NaN/Infinity.
+ */
+export function computeCommissionRate(revenueTotal: number, gmvTotal: number): number {
+  return gmvTotal > 0 ? revenueTotal / gmvTotal : 0;
+}
+
 /** Likes + comments + shares + saves — TikTok Studio's four engagement signals summed into one number. */
 export function computeEngagement(stats: TikTokVideoStats): number {
   return stats.likeCount + stats.commentCount + stats.shareCount + stats.favoriteCount;
@@ -419,9 +430,38 @@ export function buildTopTemplate(renders: Render[]): { templateId: string; count
 
 export type BucketGranularity = 'day' | 'month';
 
-export function bucketGranularityForPeriod(period: Period): BucketGranularity {
-  // 7 y 30 días se ven por día; 6 meses y máximo por mes, si no serían cientos de barras.
-  return period === 'm6' || period === 'all' ? 'month' : 'day';
+// Más allá de este lapso un bucket diario dejaría cientos de barras ilegibles; por debajo, un
+// bucket mensual sería un puñado de barras que no dice nada. 120 días cubre holgado el caso
+// común (unos pocos meses de historia) y sigue degradando a mensual antes de que el eje X se
+// vuelva ilegible.
+const DAILY_GRANULARITY_MAX_DAYS = 120;
+
+/**
+ * Inicio de la ventana de buckets: el cutoff fijo del período, o — para 'all', que no tiene
+ * cutoff — la fecha más antigua entre `sourceDates`. Null cuando 'all' no tiene ninguna fecha
+ * que graficar.
+ */
+function resolveBucketWindowStart(period: Period, now: Date, sourceDates: Date[]): Date | null {
+  if (period === 'all') {
+    if (sourceDates.length === 0) return null;
+    return new Date(Math.min(...sourceDates.map(d => d.getTime())));
+  }
+  return getPeriodCutoff(period, now) as Date;
+}
+
+/**
+ * Granularidad de bucket, decidida por el LAPSO REAL de los datos a graficar — no por el
+ * nombre del período. 'd7'/'d30' siempre caen en día (7/30 < 120) y 'm6' siempre en mes
+ * (~183 >= 120), igual que antes; lo que cambia es 'all': con unos pocos meses de historia (el
+ * caso común hoy) da día en vez de forzar mes y aplastar el gráfico a un puñado de barras, y
+ * con años de historia sigue degradando a mes solo. `sourceDates` son las fechas de lo que se
+ * va a bucketizar (fechas de orden, `postedAt`, ...).
+ */
+export function bucketGranularityForPeriod(period: Period, now: Date, sourceDates: Date[]): BucketGranularity {
+  const start = resolveBucketWindowStart(period, now, sourceDates);
+  if (!start) return 'day'; // sin datos: buildBucketSkeleton devuelve un array vacío de todos modos
+  const spanDays = (now.getTime() - start.getTime()) / 86_400_000;
+  return spanDays < DAILY_GRANULARITY_MAX_DAYS ? 'day' : 'month';
 }
 
 export interface RevenueBucket {
@@ -430,9 +470,11 @@ export interface RevenueBucket {
   revenue: number; // settled revenue only, matching the Revenue KPI
 }
 
-// Tope de barras: 30 días dan 30 buckets y 6 meses dan 7; el límite solo protege a 'all',
-// que no tiene frontera inferior y podría abarcar años.
-const MAX_BUCKETS = 36;
+// Tope de barras. Con granularidad diaria, bucketGranularityForPeriod ya mantiene el lapso por
+// debajo de DAILY_GRANULARITY_MAX_DAYS (120) antes de llegar aquí, así que esto es sobre todo
+// un colchón de seguridad para ese caso (bordes de redondeo) y para 'all' en granularidad
+// mensual con muchísimos años de historia, que sí podría seguir creciendo sin límite.
+const MAX_BUCKETS = 130;
 
 /** Human-readable label for a bucket's start date — day-granularity gets "Jun 30", month-granularity gets "Jun 2026". Always UTC: bucket dates are wall-clock-anchored-to-UTC (see parseTikTokDate), so formatting in the viewer's local zone could shift the displayed day/month. */
 export function formatBucketLabel(date: Date, granularity: BucketGranularity): string {
@@ -458,18 +500,14 @@ function monthKey(d: Date): string {
  * dates, ...).
  */
 function buildBucketSkeleton(period: Period, now: Date, sourceDates: Date[]): { granularity: BucketGranularity; buckets: { key: string; date: Date }[] } {
-  const granularity = bucketGranularityForPeriod(period);
-  let start: Date;
-  if (period === 'all') {
-    if (sourceDates.length === 0) return { granularity, buckets: [] };
-    const minTime = Math.min(...sourceDates.map(d => d.getTime()));
-    const min = new Date(minTime);
-    start = granularity === 'month'
-      ? new Date(Date.UTC(min.getUTCFullYear(), min.getUTCMonth(), 1))
-      : min;
-  } else {
-    start = getPeriodCutoff(period, now) as Date;
-  }
+  const granularity = bucketGranularityForPeriod(period, now, sourceDates);
+  const rawStart = resolveBucketWindowStart(period, now, sourceDates);
+  if (!rawStart) return { granularity, buckets: [] };
+  // 'all' con granularidad mensual arranca en el primero del mes (calendario limpio); el resto
+  // de los casos arrancan exactamente en el cutoff/fecha mínima, igual que antes.
+  const start = period === 'all' && granularity === 'month'
+    ? new Date(Date.UTC(rawStart.getUTCFullYear(), rawStart.getUTCMonth(), 1))
+    : rawStart;
 
   const buckets: { key: string; date: Date }[] = [];
   const cursor = new Date(start);
@@ -485,9 +523,11 @@ function buildBucketSkeleton(period: Period, now: Date, sourceDates: Date[]): { 
  * Builds one bucket per day (week/month) or per month (year/all) spanning from the
  * period's start up to `now`, pre-filled with zero revenue so gaps show as flat, not
  * missing. `orders` should already be scoped to the selected currency; period filtering
- * is not required (bucket keys outside [start, now] are simply never populated).
+ * is not required (bucket keys outside [start, now] are simply never populated). Returns
+ * the granularity alongside the buckets — callers read it off the result instead of
+ * re-deriving it separately, so the two can never disagree.
  */
-export function buildRevenueBuckets(orders: AnalyticsOrder[], period: Period, now: Date = new Date()): RevenueBucket[] {
+export function buildRevenueBuckets(orders: AnalyticsOrder[], period: Period, now: Date = new Date()): { granularity: BucketGranularity; buckets: RevenueBucket[] } {
   const orderDates = orders.map(o => o.orderDate).filter((d): d is string => d !== null).map(d => new Date(d));
   const { granularity, buckets: skeleton } = buildBucketSkeleton(period, now, orderDates);
   const buckets: RevenueBucket[] = skeleton.map(b => ({ ...b, revenue: 0 }));
@@ -500,7 +540,7 @@ export function buildRevenueBuckets(orders: AnalyticsOrder[], period: Period, no
     const idx = indexByKey.get(key);
     if (idx !== undefined) buckets[idx].revenue += o.totalFinalEarnedAmount;
   });
-  return buckets;
+  return { granularity, buckets };
 }
 
 export interface PostingBucket {
@@ -511,11 +551,12 @@ export interface PostingBucket {
 
 /**
  * Publishing rhythm: one bucket per day (week/month) or per month (year/all), counting videos by
- * `postedAt`. Same skeleton/granularity as `buildRevenueBuckets` so both charts bucket identically
- * for a given period. `stats` need not be period-filtered — bucket keys outside [start, now] are
- * simply never populated, same convention as the revenue buckets.
+ * `postedAt`. Same skeleton-building machinery as `buildRevenueBuckets`. `stats` need not be
+ * period-filtered — bucket keys outside [start, now] are simply never populated, same convention
+ * as the revenue buckets. Returns the granularity alongside the buckets, same reasoning as
+ * `buildRevenueBuckets`.
  */
-export function buildPostingBuckets(stats: TikTokVideoStats[], period: Period, now: Date = new Date()): PostingBucket[] {
+export function buildPostingBuckets(stats: TikTokVideoStats[], period: Period, now: Date = new Date()): { granularity: BucketGranularity; buckets: PostingBucket[] } {
   const postedDates = stats.map(s => new Date(s.postedAt));
   const { granularity, buckets: skeleton } = buildBucketSkeleton(period, now, postedDates);
   const buckets: PostingBucket[] = skeleton.map(b => ({ ...b, count: 0 }));
@@ -527,7 +568,53 @@ export function buildPostingBuckets(stats: TikTokVideoStats[], period: Period, n
     const idx = indexByKey.get(key);
     if (idx !== undefined) buckets[idx].count += 1;
   });
-  return buckets;
+  return { granularity, buckets };
+}
+
+export interface DailyPerformanceBucket {
+  key: string;
+  date: Date; // UTC start of the bucket
+  revenue: number; // settled revenue, matching the Comisión KPI
+  gmv: number; // matching the GMV KPI
+  videoCount: number; // videos posted, by postedAt
+}
+
+/**
+ * The Analytics view's main chart: revenue, GMV, and videos-published sharing ONE skeleton, so
+ * all three series land on identical bucket keys and stay aligned on the same X axis. Building
+ * three separate skeletons (one per source, like `buildRevenueBuckets`/`buildPostingBuckets` do
+ * standalone) could silently disagree on where 'all' starts, since orders and posted videos
+ * don't necessarily share the same earliest date — so this bucketizes off the union of both
+ * date sets instead. `orders` should already be scoped to the selected currency; neither `orders`
+ * nor `videoStats` need to be period-filtered (same convention as the other bucket builders).
+ */
+export function buildDailyPerformanceBuckets(
+  orders: AnalyticsOrder[],
+  videoStats: TikTokVideoStats[],
+  period: Period,
+  now: Date = new Date()
+): { granularity: BucketGranularity; buckets: DailyPerformanceBucket[] } {
+  const orderDates = orders.map(o => o.orderDate).filter((d): d is string => d !== null).map(d => new Date(d));
+  const postedDates = videoStats.map(s => new Date(s.postedAt));
+  const { granularity, buckets: skeleton } = buildBucketSkeleton(period, now, [...orderDates, ...postedDates]);
+  const buckets: DailyPerformanceBucket[] = skeleton.map(b => ({ ...b, revenue: 0, gmv: 0, videoCount: 0 }));
+
+  const indexByKey = new Map(buckets.map((b, i) => [b.key, i]));
+  const keyOf = (d: Date) => (granularity === 'day' ? dayKey(d) : monthKey(d));
+
+  orders.forEach(o => {
+    if (o.orderDate === null) return;
+    const idx = indexByKey.get(keyOf(new Date(o.orderDate)));
+    if (idx === undefined) return;
+    buckets[idx].gmv += o.gmv;
+    if (o.settlementStatus === 'Settled') buckets[idx].revenue += o.totalFinalEarnedAmount;
+  });
+  videoStats.forEach(s => {
+    const idx = indexByKey.get(keyOf(new Date(s.postedAt)));
+    if (idx !== undefined) buckets[idx].videoCount += 1;
+  });
+
+  return { granularity, buckets };
 }
 
 /**

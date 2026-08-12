@@ -334,8 +334,12 @@ const t = {
     analytics_metric_units:          'Units sold',
     analytics_metric_refunds:        'Refunds',
     analytics_metric_settlement_rate:'Settlement rate',
+    analytics_metric_commission_pct: 'Commission % of GMV',
     analytics_settled:               'Settled',
     analytics_ineligible:            'Ineligible',
+    // Analytics — daily performance chart
+    analytics_daily_chart_title: 'Daily performance',
+    analytics_daily_chart_empty: 'Not enough dated orders or captured videos to chart yet.',
     // Analytics — sections
     analytics_top_products_title:   'Top products by GMV',
     analytics_top_products_empty:   'No product GMV in this period.',
@@ -869,8 +873,12 @@ const t = {
     analytics_metric_units:          'Unidades vendidas',
     analytics_metric_refunds:        'Devoluciones',
     analytics_metric_settlement_rate:'Tasa de liquidación',
+    analytics_metric_commission_pct: '% de comisión sobre GMV',
     analytics_settled:               'Liquidada',
     analytics_ineligible:            'No elegible',
+    // Analytics — gráfica de rendimiento diario
+    analytics_daily_chart_title: 'Rendimiento diario',
+    analytics_daily_chart_empty: 'Aún no hay suficientes órdenes con fecha ni videos capturados para graficar.',
     // Analytics — sections
     analytics_top_products_title:   'Top productos por GMV',
     analytics_top_products_empty:   'Sin GMV de productos en este período.',
@@ -1404,8 +1412,12 @@ const t = {
     analytics_metric_units:          '販売数量',
     analytics_metric_refunds:        '返品数',
     analytics_metric_settlement_rate:'決済率',
+    analytics_metric_commission_pct: 'GMVに対するコミッション率',
     analytics_settled:               '決済済み',
     analytics_ineligible:            '対象外',
+    // Analytics — 日次パフォーマンスチャート
+    analytics_daily_chart_title: '日次パフォーマンス',
+    analytics_daily_chart_empty: 'グラフ化するには日付付きの注文または取得済みの動画がまだ十分ではありません。',
     // Analytics — sections
     analytics_top_products_title:   'GMV上位商品',
     analytics_top_products_empty:   'この期間の商品GMVはありません。',
