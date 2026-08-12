@@ -2,7 +2,7 @@
 // currency formatting, and per-product/per-video aggregation. Both views read the
 // same `analytics_orders` data and must bucket/sum it identically, so every helper
 // that touches that math lives here once instead of being reimplemented per view.
-import type { AnalyticsOrder, Render } from '../services/databaseService';
+import type { AnalyticsOrder, Render, TikTokVideoStats } from '../services/databaseService';
 
 export type Period = 'week' | 'month' | 'year' | 'all';
 
@@ -69,6 +69,27 @@ export function filterRendersByPeriod(renders: Render[], period: Period, now: Da
   const cutoff = getPeriodCutoff(period, now);
   if (!cutoff) return renders;
   return renders.filter(r => new Date(r.createdAt) >= cutoff);
+}
+
+/**
+ * Same period-cutoff rule as `filterByPeriod`, applied to captured video stats (filtered by
+ * `postedAt` — when the video went live, not when the extension captured it). This is the only
+ * period-scoped reading of `tiktok_videos` that makes sense: each doc is a snapshot overwritten
+ * in place, not a time series, so "views this week" really means "views of videos posted this
+ * week", i.e. a cohort filter rather than an incremental one.
+ */
+export function filterVideoStatsByPeriod(stats: TikTokVideoStats[], period: Period, now: Date = new Date()): TikTokVideoStats[] {
+  const cutoff = getPeriodCutoff(period, now);
+  if (!cutoff) return stats;
+  return stats.filter(s => new Date(s.postedAt) >= cutoff);
+}
+
+/** Half-open range filter [start, end) on `postedAt` — used for the previous-period comparison. */
+export function filterVideoStatsByDateRange(stats: TikTokVideoStats[], start: Date, end: Date): TikTokVideoStats[] {
+  return stats.filter(s => {
+    const t = new Date(s.postedAt).getTime();
+    return t >= start.getTime() && t < end.getTime();
+  });
 }
 
 // ── Currency formatting ──────────────────────────────────────────────────────
@@ -138,6 +159,32 @@ export function computeDelta(curr: number, prev: number): number | null {
   return (curr - prev) / prev;
 }
 
+/** Likes + comments + shares + saves — TikTok Studio's four engagement signals summed into one number. */
+export function computeEngagement(stats: TikTokVideoStats): number {
+  return stats.likeCount + stats.commentCount + stats.shareCount + stats.favoriteCount;
+}
+
+/** Revenue per 1,000 views (an RPM-style efficiency measure) — 0 when there are no views, never NaN/Infinity. */
+export function computeRpm(revenue: number, views: number): number {
+  return views > 0 ? (revenue / views) * 1000 : 0;
+}
+
+export interface VideoStatsMetrics {
+  videoCount: number;
+  totalViews: number;
+  totalEngagement: number;
+  engagementRate: number; // totalEngagement / totalViews, 0 when there are no views
+}
+
+/** The headline numbers for a slice of captured video stats — the KPI tiles atop the publishing-performance section. */
+export function computeVideoStatsMetrics(stats: TikTokVideoStats[]): VideoStatsMetrics {
+  const videoCount = stats.length;
+  const totalViews = stats.reduce((s, v) => s + v.playCount, 0);
+  const totalEngagement = stats.reduce((s, v) => s + computeEngagement(v), 0);
+  const engagementRate = totalViews > 0 ? totalEngagement / totalViews : 0;
+  return { videoCount, totalViews, totalEngagement, engagementRate };
+}
+
 export interface ProductAgg {
   productId: string;
   productName: string;
@@ -203,6 +250,103 @@ export function buildVideoRevenue(orders: AnalyticsOrder[], renders: Render[]): 
     .sort((a, b) => b.revenue - a.revenue || b.gmv - a.gmv);
 }
 
+export interface VideoPerformanceEntry extends VideoRevenueEntry {
+  /** Captured TikTok Studio stats for this video, when the extension has ever seen it. */
+  stats?: TikTokVideoStats;
+}
+
+/**
+ * Sibling of `buildVideoRevenue` that also folds in captured TikTok Studio stats, joining all
+ * three sources (`analytics_orders`, `tiktok_videos`, `renders`) on the one id they share
+ * (`contentId` === `itemId` === `tiktokVideoId`). A video keeps appearing even when one side of
+ * the join is missing — a sale with no capture still shows (stats undefined, exactly like
+ * `buildVideoRevenue` today), and a captured video with zero sales is appended with zeroed
+ * revenue fields instead of being dropped, so "reach that never converted" stays visible.
+ */
+export function buildVideoPerformance(orders: AnalyticsOrder[], renders: Render[], stats: TikTokVideoStats[]): VideoPerformanceEntry[] {
+  const revenueEntries = buildVideoRevenue(orders, renders);
+  const statsByItemId = new Map(stats.map(s => [s.itemId, s]));
+  const seen = new Set(revenueEntries.map(e => e.contentId));
+
+  const combined: VideoPerformanceEntry[] = revenueEntries.map(e => ({ ...e, stats: statsByItemId.get(e.contentId) }));
+  stats.forEach(s => {
+    if (seen.has(s.itemId)) return;
+    combined.push({
+      contentId: s.itemId,
+      contentType: '',
+      gmv: 0,
+      revenue: 0,
+      orderCount: 0,
+      unitsSold: 0,
+      productName: '',
+      render: renders.find(r => r.tiktokVideoId === s.itemId),
+      stats: s,
+    });
+  });
+  return combined;
+}
+
+/** Reach with zero conversion: videos with real views but no orders at all. Sorted by views, most first. */
+export function findHighReachNoConversion(entries: VideoPerformanceEntry[], limit = 5): VideoPerformanceEntry[] {
+  return entries
+    .filter(e => (e.stats?.playCount ?? 0) > 0 && e.orderCount === 0)
+    .sort((a, b) => (b.stats?.playCount ?? 0) - (a.stats?.playCount ?? 0))
+    .slice(0, limit);
+}
+
+/** The efficient ones: few views, real orders — worth repeating. Sorted by views, fewest first. */
+export function findEfficientLowReach(entries: VideoPerformanceEntry[], limit = 5): VideoPerformanceEntry[] {
+  return entries
+    .filter(e => e.orderCount > 0 && (e.stats?.playCount ?? 0) > 0)
+    .sort((a, b) => (a.stats?.playCount ?? 0) - (b.stats?.playCount ?? 0))
+    .slice(0, limit);
+}
+
+/** Sentinel group key for videos with no associated render — published by hand, not from TTChop. */
+export const NO_RECIPE_KEY = '__no_recipe__';
+
+export interface RecipeAgg {
+  key: string; // a template/voice id, or NO_RECIPE_KEY
+  videoCount: number;
+  totalViews: number;
+  totalRevenue: number;
+  avgViews: number;
+  avgRevenue: number;
+  revenuePer1000Views: number; // weighted (sum of revenue / sum of views), not an average of per-video ratios
+}
+
+/**
+ * Groups videos that have a render (by whatever id `keyFn` picks off it — script/ai template,
+ * voice template) and compares average reach/revenue and RPM per group, so "which template
+ * sells?" / "which voice sells?" has a real answer. Videos with no render at all — published by
+ * hand, outside TTChop — land in the `NO_RECIPE_KEY` bucket instead of being dropped.
+ */
+export function aggregateVideoPerformanceByRecipe(
+  entries: VideoPerformanceEntry[],
+  keyFn: (render: Render) => string | undefined
+): RecipeAgg[] {
+  const map = new Map<string, { videoCount: number; totalViews: number; totalRevenue: number }>();
+  entries.forEach(e => {
+    const key = (e.render && keyFn(e.render)) || NO_RECIPE_KEY;
+    const bucket = map.get(key) ?? { videoCount: 0, totalViews: 0, totalRevenue: 0 };
+    bucket.videoCount += 1;
+    bucket.totalViews += e.stats?.playCount ?? 0;
+    bucket.totalRevenue += e.revenue;
+    map.set(key, bucket);
+  });
+  return Array.from(map.entries())
+    .map(([key, b]) => ({
+      key,
+      videoCount: b.videoCount,
+      totalViews: b.totalViews,
+      totalRevenue: b.totalRevenue,
+      avgViews: b.totalViews / b.videoCount,
+      avgRevenue: b.totalRevenue / b.videoCount,
+      revenuePer1000Views: computeRpm(b.totalRevenue, b.totalViews),
+    }))
+    .sort((a, b) => b.revenuePer1000Views - a.revenuePer1000Views);
+}
+
 /** The scriptTemplateId (falling back to aiTemplateId) used most often among the given renders. */
 export function buildTopTemplate(renders: Render[]): { templateId: string; count: number } | null {
   const counts = new Map<string, number>();
@@ -251,41 +395,80 @@ function monthKey(d: Date): string {
 }
 
 /**
+ * Empty bucket skeleton (day or month step) spanning from the period's start up to `now`. Shared
+ * by every bucketed-over-time chart (revenue, posting rhythm, ...) so they always agree on bucket
+ * boundaries. `sourceDates` is only consulted for period === 'all', to find the earliest bucket
+ * when there's no fixed cutoff — pass the dates of whatever's being bucketed (order dates, posted
+ * dates, ...).
+ */
+function buildBucketSkeleton(period: Period, now: Date, sourceDates: Date[]): { granularity: BucketGranularity; buckets: { key: string; date: Date }[] } {
+  const granularity = bucketGranularityForPeriod(period);
+  let start: Date;
+  if (period === 'all') {
+    if (sourceDates.length === 0) return { granularity, buckets: [] };
+    const minTime = Math.min(...sourceDates.map(d => d.getTime()));
+    start = granularity === 'month' ? startOfMonth(new Date(minTime)) : new Date(minTime);
+  } else {
+    start = getPeriodCutoff(period, now) as Date;
+  }
+
+  const buckets: { key: string; date: Date }[] = [];
+  const cursor = new Date(start);
+  while (cursor.getTime() <= now.getTime()) {
+    buckets.push({ key: granularity === 'day' ? dayKey(cursor) : monthKey(cursor), date: new Date(cursor) });
+    if (granularity === 'day') cursor.setUTCDate(cursor.getUTCDate() + 1);
+    else cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return { granularity, buckets: buckets.length > MAX_BUCKETS ? buckets.slice(buckets.length - MAX_BUCKETS) : buckets };
+}
+
+/**
  * Builds one bucket per day (week/month) or per month (year/all) spanning from the
  * period's start up to `now`, pre-filled with zero revenue so gaps show as flat, not
  * missing. `orders` should already be scoped to the selected currency; period filtering
  * is not required (bucket keys outside [start, now] are simply never populated).
  */
 export function buildRevenueBuckets(orders: AnalyticsOrder[], period: Period, now: Date = new Date()): RevenueBucket[] {
-  const granularity = bucketGranularityForPeriod(period);
-  let start: Date;
-  if (period === 'all') {
-    const orderDates = orders.map(o => o.orderDate).filter((d): d is string => d !== null).map(d => new Date(d));
-    if (orderDates.length === 0) return [];
-    const minTime = Math.min(...orderDates.map(d => d.getTime()));
-    start = granularity === 'month' ? startOfMonth(new Date(minTime)) : new Date(minTime);
-  } else {
-    start = getPeriodCutoff(period, now) as Date;
-  }
+  const orderDates = orders.map(o => o.orderDate).filter((d): d is string => d !== null).map(d => new Date(d));
+  const { granularity, buckets: skeleton } = buildBucketSkeleton(period, now, orderDates);
+  const buckets: RevenueBucket[] = skeleton.map(b => ({ ...b, revenue: 0 }));
 
-  const buckets: RevenueBucket[] = [];
-  const cursor = new Date(start);
-  while (cursor.getTime() <= now.getTime()) {
-    buckets.push({ key: granularity === 'day' ? dayKey(cursor) : monthKey(cursor), date: new Date(cursor), revenue: 0 });
-    if (granularity === 'day') cursor.setUTCDate(cursor.getUTCDate() + 1);
-    else cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-  }
-  const trimmed = buckets.length > MAX_BUCKETS ? buckets.slice(buckets.length - MAX_BUCKETS) : buckets;
-
-  const indexByKey = new Map(trimmed.map((b, i) => [b.key, i]));
+  const indexByKey = new Map(buckets.map((b, i) => [b.key, i]));
   orders.forEach(o => {
     if (o.settlementStatus !== 'Settled' || o.orderDate === null) return;
     const d = new Date(o.orderDate);
     const key = granularity === 'day' ? dayKey(d) : monthKey(d);
     const idx = indexByKey.get(key);
-    if (idx !== undefined) trimmed[idx].revenue += o.totalFinalEarnedAmount;
+    if (idx !== undefined) buckets[idx].revenue += o.totalFinalEarnedAmount;
   });
-  return trimmed;
+  return buckets;
+}
+
+export interface PostingBucket {
+  key: string;
+  date: Date; // UTC start of the bucket
+  count: number; // videos posted in this bucket
+}
+
+/**
+ * Publishing rhythm: one bucket per day (week/month) or per month (year/all), counting videos by
+ * `postedAt`. Same skeleton/granularity as `buildRevenueBuckets` so both charts bucket identically
+ * for a given period. `stats` need not be period-filtered — bucket keys outside [start, now] are
+ * simply never populated, same convention as the revenue buckets.
+ */
+export function buildPostingBuckets(stats: TikTokVideoStats[], period: Period, now: Date = new Date()): PostingBucket[] {
+  const postedDates = stats.map(s => new Date(s.postedAt));
+  const { granularity, buckets: skeleton } = buildBucketSkeleton(period, now, postedDates);
+  const buckets: PostingBucket[] = skeleton.map(b => ({ ...b, count: 0 }));
+
+  const indexByKey = new Map(buckets.map((b, i) => [b.key, i]));
+  stats.forEach(s => {
+    const d = new Date(s.postedAt);
+    const key = granularity === 'day' ? dayKey(d) : monthKey(d);
+    const idx = indexByKey.get(key);
+    if (idx !== undefined) buckets[idx].count += 1;
+  });
+  return buckets;
 }
 
 /**

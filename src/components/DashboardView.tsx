@@ -9,7 +9,7 @@ import {
   Package, Video, LayoutTemplate, Scissors, Sparkles, Info,
 } from 'lucide-react';
 import { db, getVisibleForContainer } from '../services/databaseService';
-import type { AnalyticsOrder, Render, Template } from '../services/databaseService';
+import type { AnalyticsOrder, Render, Template, TikTokVideoStats } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
 import type { Translations } from '../i18n';
@@ -18,7 +18,7 @@ import {
   filterByPeriod, filterByDateRange, filterRendersByPeriod, getPreviousPeriodRange,
   formatCurrency, computeOrderMetrics, computeDelta, aggregateByProduct, buildVideoRevenue,
   buildTopTemplate, buildRevenueBuckets, bucketGranularityForPeriod, formatBucketLabel,
-  templateNameResolver,
+  templateNameResolver, filterVideoStatsByPeriod, filterVideoStatsByDateRange, computeVideoStatsMetrics,
 } from '../utils/analytics';
 import { useCurrencySelection } from '../hooks/useCurrencySelection';
 import { SectionCard, PeriodSelector, CurrencySelector } from './shared/AnalyticsUI';
@@ -244,6 +244,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
 
   const [allOrders, setAllOrders] = useState<AnalyticsOrder[]>([]);
   const [allRenders, setAllRenders] = useState<Render[]>([]);
+  const [allVideoStats, setAllVideoStats] = useState<TikTokVideoStats[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -259,13 +260,14 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
     setLoading(true);
     setLoadError('');
     try {
-      const [orderRows, renderRows, templateRows] = await Promise.all([
-        db.getAnalyticsOrders(), db.getRenders(), db.getTemplates(),
+      const [orderRows, renderRows, templateRows, videoStatsRows] = await Promise.all([
+        db.getAnalyticsOrders(), db.getRenders(), db.getTemplates(), db.getTikTokVideoStats(),
       ]);
       if (!mountedRef.current) return;
       setAllOrders(orderRows);
       setAllRenders(renderRows);
       setTemplates(templateRows);
+      setAllVideoStats(videoStatsRows);
     } catch (err) {
       console.error(err);
       if (mountedRef.current) setLoadError(t.dashboard_error_load);
@@ -276,10 +278,11 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Neither analytics_orders nor renders are container-filtered server side — re-derive on
-  // activeAccountId change instead of re-fetching (same pattern as AnalyticsView).
+  // Neither analytics_orders, renders, nor tiktok_videos are container-filtered server side —
+  // re-derive on activeAccountId change instead of re-fetching (same pattern as AnalyticsView).
   const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId), [allOrders, activeAccountId]);
   const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
+  const videoStats = useMemo(() => getVisibleForContainer(allVideoStats, activeAccountId), [allVideoStats, activeAccountId]);
 
   const now = useMemo(() => new Date(), []);
 
@@ -304,6 +307,18 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
 
   const currentMetrics = useMemo(() => computeOrderMetrics(periodOrders), [periodOrders]);
   const previousMetrics = useMemo(() => computeOrderMetrics(previousPeriodOrders), [previousPeriodOrders]);
+
+  // Views KPI — cross-referenced from tiktok_videos (captured by the extension), not orders.
+  // Its own "has previous data" flag: a period with no captured videos shouldn't be conflated
+  // with a period that simply had no sales.
+  const periodVideoStats = useMemo(() => filterVideoStatsByPeriod(videoStats, period, now), [videoStats, period, now]);
+  const previousVideoStats = useMemo(
+    () => (previousRange ? filterVideoStatsByDateRange(videoStats, previousRange.start, previousRange.end) : []),
+    [videoStats, previousRange]
+  );
+  const currentViewsMetrics = useMemo(() => computeVideoStatsMetrics(periodVideoStats), [periodVideoStats]);
+  const previousViewsMetrics = useMemo(() => computeVideoStatsMetrics(previousVideoStats), [previousVideoStats]);
+  const viewsDelta = previousVideoStats.length > 0 ? computeDelta(currentViewsMetrics.totalViews, previousViewsMetrics.totalViews) : null;
 
   const granularity = bucketGranularityForPeriod(period);
   const buckets = useMemo(() => buildRevenueBuckets(currencyOrders, period, now), [currencyOrders, period, now]);
@@ -419,6 +434,12 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                   label={t.analytics_metric_orders}
                   value={currentMetrics.orderCount.toLocaleString()}
                   deltaPct={delta(currentMetrics.orderCount, previousMetrics.orderCount)}
+                  comparisonLabel={comparisonLabel}
+                />
+                <KpiCard
+                  label={t.dashboard_metric_views}
+                  value={currentViewsMetrics.totalViews.toLocaleString()}
+                  deltaPct={viewsDelta}
                   comparisonLabel={comparisonLabel}
                 />
               </div>

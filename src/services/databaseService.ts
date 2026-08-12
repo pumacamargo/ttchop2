@@ -248,6 +248,31 @@ export interface AnalyticsOrder extends ParsedAnalyticsOrder {
   importedAt: string;
 }
 
+// ── TikTok Studio video stats (captured by the browser extension) ──────────
+// One doc per video at tiktok_videos/{userId}_{itemId}, overwritten with the latest capture — this
+// is a snapshot, not a time series. `itemId` is TikTok's video id, the SAME id that shows up as
+// `analytics_orders.contentId` and `renders.tiktokVideoId` — that shared id is what lets Analytics
+// cross-reference views/engagement, sales, and the render recipe for one video. The webapp only
+// ever READS this collection; it's written exclusively by the extension from TikTok Studio.
+export interface TikTokVideoStats {
+  id: string; // `${userId}_${itemId}`
+  userId: string;
+  itemId: string;
+  // Container this capture lives in — see Product.accountId. Absent when captured before an
+  // account was linked to a container, or the extension didn't know which one to tag it with.
+  accountId?: string;
+  playCount: number;
+  likeCount: number;
+  commentCount: number;
+  shareCount: number;
+  favoriteCount: number;
+  postedAt: string;  // ISO — when the video went live on TikTok
+  durationMs: number;
+  desc: string;
+  coverUrl: string;
+  capturedAt: string; // ISO — when the extension last captured these numbers
+}
+
 // ── Brand Concept (Phase 3) ─────────────────────────────────────────────────
 // One doc per CONTAINER at brand_concepts/{docId} — same `containerDocId()` scheme as
 // calendar_strategy above: the channel's art direction (what it's about, niche/style, brand
@@ -3646,6 +3671,18 @@ class DatabaseService {
     }
 
     return { newCount, updatedCount };
+  }
+
+  // ── TikTok Studio video stats (captured by the browser extension) ────────
+  // Read-only from the webapp's side — see TikTokVideoStats above for why. Same userId-scoped
+  // query pattern as every other getter; container filtering happens in memory afterwards via
+  // getVisibleForContainer, same as getAnalyticsOrders/getRenders.
+  async getTikTokVideoStats(): Promise<TikTokVideoStats[]> {
+    const user = auth.currentUser;
+    if (!user) return [];
+    const q = query(collection(firestore, 'tiktok_videos'), where('userId', '==', user.uid));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as TikTokVideoStats));
   }
 
   // ── Brand Concept ─────────────────────────────────────────────────────────
