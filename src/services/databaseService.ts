@@ -261,6 +261,10 @@ export interface TikTokVideoStats {
   // Container this capture lives in — see Product.accountId. Absent when captured before an
   // account was linked to a container, or the extension didn't know which one to tag it with.
   accountId?: string;
+  // The TikTok handle (no '@') this capture belongs to, e.g. 'arts.choice'. This is the durable
+  // "whose data is this" field: unlike accountId, it does not depend on the account ever being
+  // connected via OAuth. Absent only for captures taken before this field existed.
+  tiktokUsername?: string;
   playCount: number;
   likeCount: number;
   commentCount: number;

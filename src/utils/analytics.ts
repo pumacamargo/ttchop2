@@ -302,6 +302,54 @@ export function findEfficientLowReach(entries: VideoPerformanceEntry[], limit = 
     .slice(0, limit);
 }
 
+// ── Grouping by captured TikTok handle ──────────────────────────────────────
+// The handle (`TikTokVideoStats.tiktokUsername`) is the durable "whose data is this" signal —
+// it survives with zero TikTok accounts connected by OAuth, unlike `accountId` (which only
+// exists once a container/account has been chosen). This lets Analytics show "which accounts
+// have data" purely from what the extension has captured.
+
+/** Sentinel group key for captures with no `tiktokUsername` (captured before this field existed). */
+export const NO_USERNAME_KEY = '__no_username__';
+
+export interface UsernameAgg {
+  username: string; // normalized handle (no '@'), or NO_USERNAME_KEY
+  videoCount: number;
+  totalViews: number;
+}
+
+/** One row per distinct `tiktokUsername` found in `stats` (untagged captures grouped under `NO_USERNAME_KEY`), sorted by views descending. */
+export function aggregateVideoStatsByUsername(stats: TikTokVideoStats[]): UsernameAgg[] {
+  const map = new Map<string, UsernameAgg>();
+  stats.forEach(s => {
+    const key = s.tiktokUsername || NO_USERNAME_KEY;
+    const entry = map.get(key) ?? { username: key, videoCount: 0, totalViews: 0 };
+    entry.videoCount += 1;
+    entry.totalViews += s.playCount;
+    map.set(key, entry);
+  });
+  return Array.from(map.values()).sort((a, b) => b.totalViews - a.totalViews);
+}
+
+/** Narrows `stats` to one handle (or `NO_USERNAME_KEY`); `null` means no filter (every capture). */
+export function filterVideoStatsByUsername(stats: TikTokVideoStats[], username: string | null): TikTokVideoStats[] {
+  if (!username) return stats;
+  if (username === NO_USERNAME_KEY) return stats.filter(s => !s.tiktokUsername);
+  return stats.filter(s => s.tiktokUsername === username);
+}
+
+/**
+ * Matches a `VideoPerformanceEntry` against a handle filter, via whatever captured stats it
+ * carries. `null` (no filter, "all accounts") matches everything. Once a specific handle is
+ * selected, an entry with NO captured stats at all is excluded rather than kept — there is no
+ * account information to attribute it to, so showing it under one handle would misattribute a
+ * sale that might belong to a different (or no) account.
+ */
+export function matchesUsernameFilter(entry: VideoPerformanceEntry, username: string | null): boolean {
+  if (!username) return true;
+  if (!entry.stats) return false;
+  return (entry.stats.tiktokUsername || NO_USERNAME_KEY) === username;
+}
+
 /** Sentinel group key for videos with no associated render — published by hand, not from TTChop. */
 export const NO_RECIPE_KEY = '__no_recipe__';
 

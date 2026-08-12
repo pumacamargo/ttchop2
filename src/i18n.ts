@@ -363,6 +363,13 @@ const t = {
     analytics_video_recipe_col_avg_views:   'Avg. views',
     analytics_video_recipe_col_avg_revenue: 'Avg. revenue',
     analytics_video_recipe_col_rpm:         'RPM /1K views',
+
+    analytics_video_by_account_title:       'Accounts with data',
+    analytics_video_by_account_hint:        "Detected from the TikTok handle captured with each video — works even with no TikTok account connected.",
+    analytics_video_account_all:            'All accounts',
+    analytics_video_account_none:           'No account',
+    analytics_video_account_summary:        '{videos} videos · {views} views',
+    analytics_video_account_connected_hint: 'Matches a connected account',
     // Brand Concept
     brand_title:             'Brand Concept',
     brand_subtitle:          'Define the visual identity and voice for your content.',
@@ -860,6 +867,13 @@ const t = {
     analytics_video_recipe_col_avg_views:   'Views prom.',
     analytics_video_recipe_col_avg_revenue: 'Ingreso prom.',
     analytics_video_recipe_col_rpm:         'Ingreso /1K views',
+
+    analytics_video_by_account_title:       'Cuentas con datos',
+    analytics_video_by_account_hint:        'Detectadas a partir del @usuario de TikTok capturado con cada video — funciona aunque no haya ninguna cuenta de TikTok conectada.',
+    analytics_video_account_all:            'Todas las cuentas',
+    analytics_video_account_none:           'Sin cuenta',
+    analytics_video_account_summary:        '{videos} videos · {views} views',
+    analytics_video_account_connected_hint: 'Coincide con una cuenta conectada',
     // Brand Concept
     brand_title:             'Concepto de Marca',
     brand_subtitle:          'Define la identidad visual y el tono de tu contenido.',
@@ -1357,6 +1371,13 @@ const t = {
     analytics_video_recipe_col_avg_views:   '平均再生数',
     analytics_video_recipe_col_avg_revenue: '平均収益',
     analytics_video_recipe_col_rpm:         '再生1000回あたりの収益',
+
+    analytics_video_by_account_title:       'データのあるアカウント',
+    analytics_video_by_account_hint:        '各動画に記録されたTikTokのユーザー名から自動検出します — TikTokアカウントを接続していなくても機能します。',
+    analytics_video_account_all:            'すべてのアカウント',
+    analytics_video_account_none:           'アカウントなし',
+    analytics_video_account_summary:        '{videos}本 ・ {views}回再生',
+    analytics_video_account_connected_hint: '接続済みアカウントと一致',
     // Brand Concept
     brand_title:             'ブランドコンセプト',
     brand_subtitle:          'コンテンツのビジュアルアイデンティティとトーンを定義。',

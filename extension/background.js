@@ -251,10 +251,20 @@ async function createProduct(auth, scraped) {
 // tiempo, no queremos historial acá, sino la última foto).
 const TIKTOK_VIDEOS_COMMIT_BATCH_SIZE = 400; // margen bajo el límite de 500 writes por :commit
 
-function toVideoStatsFields(auth, item, accountId) {
+// Mismas reglas de normalización que en studio-content.js: sin arroba, sin espacios, en
+// minúsculas. El handle es el dato duradero que dice de qué cuenta son estos videos — se
+// valida acá también (no solo en el content script) porque este es el único lugar que
+// efectivamente escribe en Firestore.
+function normalizeTikTokUsername(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw.trim().replace(/^@+/, '').replace(/\s+/g, '').toLowerCase();
+}
+
+function toVideoStatsFields(auth, item, accountId, tiktokUsername) {
   const fields = {
     userId: { stringValue: auth.uid },
     itemId: { stringValue: item.itemId },
+    tiktokUsername: { stringValue: tiktokUsername },
     playCount: { integerValue: String(item.playCount || 0) },
     likeCount: { integerValue: String(item.likeCount || 0) },
     commentCount: { integerValue: String(item.commentCount || 0) },
@@ -272,7 +282,7 @@ function toVideoStatsFields(auth, item, accountId) {
   return fields;
 }
 
-async function saveVideoStats(auth, items, accountId) {
+async function saveVideoStats(auth, items, accountId, tiktokUsername) {
   if (!Array.isArray(items) || items.length === 0) return 0;
 
   const documentsBase = `projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
@@ -281,7 +291,7 @@ async function saveVideoStats(auth, items, accountId) {
     .map(item => ({
       update: {
         name: `${documentsBase}/tiktok_videos/${auth.uid}_${item.itemId}`,
-        fields: toVideoStatsFields(auth, item, accountId)
+        fields: toVideoStatsFields(auth, item, accountId, tiktokUsername)
       }
     }));
 
@@ -340,7 +350,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse({ ok: false, error: 'NOT_LOGGED_IN' });
           return;
         }
-        const saved = await saveVideoStats(auth, message.items, message.accountId);
+        // El handle es el punto de todo el cambio: sin él, un video guardado queda igual de
+        // "huérfano" que los 50 de @arts.choice que motivaron esto. Se rechaza el guardado
+        // completo en vez de guardar con un campo vacío.
+        const tiktokUsername = normalizeTikTokUsername(message.tiktokUsername);
+        if (!tiktokUsername) {
+          sendResponse({ ok: false, error: 'MISSING_USERNAME' });
+          return;
+        }
+        const saved = await saveVideoStats(auth, message.items, message.accountId, tiktokUsername);
         sendResponse({ ok: true, saved });
       }
     } catch (err) {

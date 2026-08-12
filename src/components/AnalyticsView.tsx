@@ -16,7 +16,8 @@ import {
   filterVideoStatsByPeriod, computeVideoStatsMetrics, computeEngagement, computeRpm,
   buildPostingBuckets, bucketGranularityForPeriod, formatBucketLabel, buildVideoPerformance,
   findHighReachNoConversion, findEfficientLowReach, aggregateVideoPerformanceByRecipe, NO_RECIPE_KEY,
-  templateNameResolver,
+  templateNameResolver, aggregateVideoStatsByUsername, filterVideoStatsByUsername, matchesUsernameFilter,
+  NO_USERNAME_KEY,
 } from '../utils/analytics';
 import { useCurrencySelection } from '../hooks/useCurrencySelection';
 import {
@@ -177,7 +178,7 @@ const VideoThumb: React.FC<{ src?: string; alt: string }> = ({ src, alt }) =>
 
 export const AnalyticsView: React.FC = () => {
   const t = useT();
-  const { activeAccountId } = useContainer();
+  const { activeAccountId, accounts } = useContainer();
 
   const [allOrders, setAllOrders] = useState<AnalyticsOrder[]>([]);
   const [allRenders, setAllRenders] = useState<Render[]>([]);
@@ -189,6 +190,10 @@ export const AnalyticsView: React.FC = () => {
   const [period, setPeriod] = useState<Period>('all');
   const [videoSortKey, setVideoSortKey] = useState<VideoSortKey>('views');
   const [videoSortDir, setVideoSortDir] = useState<'asc' | 'desc'>('desc');
+  // Filters the whole publishing-performance section by captured TikTok handle. Derived purely
+  // from tiktokUsername on the captures themselves — null (no filter) works identically whether
+  // zero or several TikTok accounts are connected via OAuth.
+  const [selectedUsername, setSelectedUsername] = useState<string | null>(null);
 
   const [importing, setImporting] = useState(false);
   const [importStep, setImportStep] = useState('');
@@ -252,6 +257,27 @@ export const AnalyticsView: React.FC = () => {
     [periodOrders, renders]
   );
 
+  // ── Handles found in the captured data (independent of OAuth-connected accounts) ───────────
+  // Grouped from ALL of this container's captures, not period-filtered: this is "which accounts
+  // have data at all", a stable list the user picks from regardless of the period selector.
+  const usernameAgg = useMemo(() => aggregateVideoStatsByUsername(videoStats), [videoStats]);
+  const usernameFilteredStats = useMemo(
+    () => filterVideoStatsByUsername(videoStats, selectedUsername),
+    [videoStats, selectedUsername]
+  );
+
+  /** A connected TikTok account whose displayName resembles this handle — `displayName` and the
+   *  handle are different TikTok fields and don't always match, so this is a loose, best-effort
+   *  signal (shown as an avatar), never a hard requirement. */
+  const matchedAccountForHandle = useCallback((username: string) => {
+    const normalizedHandle = username.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (!normalizedHandle) return undefined;
+    return accounts.find(a => {
+      const normalizedName = a.displayName.replace(/[^a-z0-9]/gi, '').toLowerCase();
+      return normalizedName.length > 0 && (normalizedName.includes(normalizedHandle) || normalizedHandle.includes(normalizedName));
+    });
+  }, [accounts]);
+
   // ── Publishing performance: cross-references tiktok_videos with analytics_orders/renders ────
   // Stats are a snapshot per video (overwritten, not a time series) — only the "posted in this
   // period" cohort (periodVideoStats) is meaningful as a period-scoped quantity. The per-video
@@ -259,18 +285,26 @@ export const AnalyticsView: React.FC = () => {
   // (same convention as revenueByVideo using unfiltered `renders`): a sale in the selected period
   // must never lose its video's lifetime view/engagement numbers just because the video itself
   // was posted outside the period.
-  const periodVideoStats = useMemo(() => filterVideoStatsByPeriod(videoStats, period), [videoStats, period]);
+  const periodVideoStats = useMemo(() => filterVideoStatsByPeriod(usernameFilteredStats, period), [usernameFilteredStats, period]);
   const videoStatsMetrics = useMemo(() => computeVideoStatsMetrics(periodVideoStats), [periodVideoStats]);
   const postingGranularity = bucketGranularityForPeriod(period);
-  const postingBuckets = useMemo(() => buildPostingBuckets(videoStats, period), [videoStats, period]);
+  const postingBuckets = useMemo(() => buildPostingBuckets(usernameFilteredStats, period), [usernameFilteredStats, period]);
 
   const hasOrdersData = orders.length > 0;
   const hasVideoStats = videoStats.length > 0;
   const hasAnyData = hasOrdersData || hasVideoStats;
 
+  // Joined against the FULL (unfiltered by handle) videoStats — the handle filter is applied
+  // afterwards as `filteredVideoPerformance`, so an order-only entry with no capture at all can be
+  // told apart from one whose capture belongs to a different handle (see matchesUsernameFilter).
   const videoPerformance = useMemo(
     () => buildVideoPerformance(periodOrders, renders, videoStats),
     [periodOrders, renders, videoStats]
+  );
+
+  const filteredVideoPerformance = useMemo(
+    () => selectedUsername ? videoPerformance.filter(e => matchesUsernameFilter(e, selectedUsername)) : videoPerformance,
+    [videoPerformance, selectedUsername]
   );
 
   const videoValueForSort = useCallback((e: VideoPerformanceEntry, key: VideoSortKey): number => {
@@ -287,9 +321,9 @@ export const AnalyticsView: React.FC = () => {
   }, []);
 
   const sortedVideoPerformance = useMemo(() => {
-    const sorted = [...videoPerformance].sort((a, b) => videoValueForSort(b, videoSortKey) - videoValueForSort(a, videoSortKey));
+    const sorted = [...filteredVideoPerformance].sort((a, b) => videoValueForSort(b, videoSortKey) - videoValueForSort(a, videoSortKey));
     return videoSortDir === 'asc' ? sorted.reverse() : sorted;
-  }, [videoPerformance, videoSortKey, videoSortDir, videoValueForSort]);
+  }, [filteredVideoPerformance, videoSortKey, videoSortDir, videoValueForSort]);
 
   const handleVideoSort = useCallback((key: VideoSortKey) => {
     setVideoSortDir(prevDir => (key === videoSortKey ? (prevDir === 'asc' ? 'desc' : 'asc') : 'desc'));
@@ -297,19 +331,19 @@ export const AnalyticsView: React.FC = () => {
   }, [videoSortKey]);
 
   // ── "What works": efficiency reads on top of the same cross-referenced rows ─────────────────
-  const highReachNoConversion = useMemo(() => findHighReachNoConversion(videoPerformance, 5), [videoPerformance]);
-  const efficientLowReach = useMemo(() => findEfficientLowReach(videoPerformance, 5), [videoPerformance]);
+  const highReachNoConversion = useMemo(() => findHighReachNoConversion(filteredVideoPerformance, 5), [filteredVideoPerformance]);
+  const efficientLowReach = useMemo(() => findEfficientLowReach(filteredVideoPerformance, 5), [filteredVideoPerformance]);
 
   const templateName = useMemo(() => templateNameResolver(templates), [templates]);
   const recipeLabel = useCallback((key: string) => (key === NO_RECIPE_KEY ? t.analytics_video_no_recipe : (templateName(key) ?? key)), [templateName, t.analytics_video_no_recipe]);
 
   const byTemplate = useMemo(
-    () => aggregateVideoPerformanceByRecipe(videoPerformance, r => r.scriptTemplateId || r.aiTemplateId),
-    [videoPerformance]
+    () => aggregateVideoPerformanceByRecipe(filteredVideoPerformance, r => r.scriptTemplateId || r.aiTemplateId),
+    [filteredVideoPerformance]
   );
   const byVoice = useMemo(
-    () => aggregateVideoPerformanceByRecipe(videoPerformance, r => r.voiceTemplateId),
-    [videoPerformance]
+    () => aggregateVideoPerformanceByRecipe(filteredVideoPerformance, r => r.voiceTemplateId),
+    [filteredVideoPerformance]
   );
 
   // ── Import handler ──────────────────────────────────────────────────────────
@@ -684,6 +718,66 @@ export const AnalyticsView: React.FC = () => {
             </div>
           ) : (
             <>
+              {/* Accounts found in the captured data — derived from tiktokUsername on the docs
+                  themselves, never from OAuth-connected accounts, so this works identically with
+                  zero accounts connected. Selecting one scopes the whole section below. */}
+              {usernameAgg.length > 0 && (
+                <SectionCard title={t.analytics_video_by_account_title}>
+                  <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: '-0.2rem 0 0' }}>{t.analytics_video_by_account_hint}</p>
+                  <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '2px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedUsername(null)}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.35rem 0.85rem',
+                        borderRadius: '999px', minHeight: '44px', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer',
+                        whiteSpace: 'nowrap', flexShrink: 0,
+                        background: selectedUsername === null ? 'var(--gradient)' : 'var(--bg-card)',
+                        color: selectedUsername === null ? '#fff' : 'var(--text-secondary)',
+                        border: selectedUsername === null ? '1px solid transparent' : '1px solid var(--border)',
+                      }}
+                    >
+                      {t.analytics_video_account_all}
+                    </button>
+                    {usernameAgg.map(u => {
+                      const active = selectedUsername === u.username;
+                      const matched = u.username !== NO_USERNAME_KEY ? matchedAccountForHandle(u.username) : undefined;
+                      const label = u.username === NO_USERNAME_KEY ? t.analytics_video_account_none : `@${u.username}`;
+                      return (
+                        <button
+                          key={u.username}
+                          type="button"
+                          onClick={() => setSelectedUsername(u.username)}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.35rem 0.85rem',
+                            borderRadius: '999px', minHeight: '44px', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer',
+                            whiteSpace: 'nowrap', flexShrink: 0,
+                            background: active ? 'var(--gradient)' : 'var(--bg-card)',
+                            color: active ? '#fff' : 'var(--text-secondary)',
+                            border: active ? '1px solid transparent' : '1px solid var(--border)',
+                          }}
+                        >
+                          {matched && (
+                            <img
+                              src={matched.avatarUrl}
+                              alt=""
+                              title={t.analytics_video_account_connected_hint}
+                              style={{ width: 16, height: 16, borderRadius: '50%', flexShrink: 0, objectFit: 'cover' }}
+                            />
+                          )}
+                          <span>{label}</span>
+                          <span style={{ opacity: 0.75, fontWeight: 600 }}>
+                            {t.analytics_video_account_summary
+                              .replace('{videos}', u.videoCount.toLocaleString())
+                              .replace('{views}', u.totalViews.toLocaleString())}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </SectionCard>
+              )}
+
               {/* KPI tiles */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
                 <StatTile label={t.analytics_video_metric_published} value={videoStatsMetrics.videoCount.toLocaleString()} />
