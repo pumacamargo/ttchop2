@@ -6,7 +6,6 @@
 const STUDIO_ACCOUNTS_CACHE_KEY = 'ttchop_accounts_cache';
 const STUDIO_ACCOUNTS_CACHE_TTL_MS = 5 * 60 * 1000;
 const STUDIO_LAST_CONTAINER_KEY = 'ttchop_last_container_studio';
-const STUDIO_MANUAL_HANDLE_KEY = 'ttchop_manual_handle';
 
 // item_id -> item normalizado. Un Map por item_id ya resuelve la deduplicación:
 // si TikTok vuelve a pedir una página que ya vimos (scroll hacia arriba, retry),
@@ -16,15 +15,12 @@ const capturedItems = new Map();
 let accountsPromise = null;
 let saving = false;
 
-// --- Handle de TikTok: el dato duradero que acompaña cada captura ------------------------
+// --- Handle de TikTok: pista opcional que acompaña cada captura --------------------------
 // Cascada de detección: a) tráfico de la API (studio-interceptor.js) → b) estado embebido en
-// el HTML inicial → c) el usuario lo escribe a mano. `detectedHandle` es lo que encontramos
-// automáticamente (a o b); `manualHandle` es lo que el usuario tipeó (persistido para la
-// próxima vez). El handle efectivo es siempre detectedHandle si existe, si no manualHandle.
+// el HTML inicial. Si ninguna de las dos encuentra nada, se guarda igual sin handle — el
+// contenedor (selector de cuenta) es lo que realmente organiza la captura, y el handle se
+// puede corregir después desde "Manage Imports" en la webapp.
 let detectedHandle = null;
-let manualHandle = '';
-let handleBoxMode = null; // 'detected' | 'manual' — controla cuándo se reconstruye el input
-let manualHandlePersistTimer = null;
 
 function normalizeHandle(raw) {
   if (typeof raw !== 'string') return '';
@@ -97,23 +93,6 @@ function setDetectedHandle(rawHandle) {
   const normalized = normalizeHandle(rawHandle);
   if (!normalized || normalized === detectedHandle) return;
   detectedHandle = normalized;
-  renderPanel();
-}
-
-function effectiveHandle() {
-  return detectedHandle || normalizeHandle(manualHandle);
-}
-
-function persistManualHandle() {
-  if (manualHandlePersistTimer) clearTimeout(manualHandlePersistTimer);
-  manualHandlePersistTimer = setTimeout(() => {
-    chrome.storage.local.set({ [STUDIO_MANUAL_HANDLE_KEY]: normalizeHandle(manualHandle) }).catch(() => {});
-  }, 400);
-}
-
-function onHandleInputChange(e) {
-  manualHandle = e.target.value;
-  persistManualHandle();
   renderPanel();
 }
 
@@ -269,7 +248,6 @@ function buildPanel() {
   handleBox.id = 'ttchop-studio-handle';
   styleEl(handleBox, 'margin-bottom: 10px;');
   root.appendChild(handleBox);
-  handleBoxMode = null; // fuerza reconstruir el contenido la próxima vez que se renderice
 
   const accountsBox = document.createElement('div');
   accountsBox.id = 'ttchop-studio-accounts';
@@ -373,7 +351,7 @@ function renderMismatchWarning() {
   warning.textContent = '';
   warning.style.cssText = 'all: initial; display: none;';
 
-  const handle = effectiveHandle();
+  const handle = detectedHandle;
   const selectedId = currentSelectedAccountId();
   if (!handle || !selectedId) return;
 
@@ -384,72 +362,20 @@ function renderMismatchWarning() {
   warning.textContent = `⚠ "${account.displayName}" y @${handle} podrían no ser la misma cuenta.`;
 }
 
+// Puramente informativo: si se detectó un handle, se muestra como pista discreta (útil luego
+// en "Manage Imports"); si no se detectó nada, no se muestra nada — no bloquea ni se pide.
 function renderHandleBox(container) {
-  const mode = detectedHandle ? 'detected' : 'manual';
+  container.innerHTML = '';
+  if (!detectedHandle) return;
 
-  if (handleBoxMode !== mode) {
-    container.innerHTML = '';
-    handleBoxMode = mode;
-
-    if (mode === 'manual') {
-      const label = document.createElement('label');
-      styleEl(label, 'font-size: 11px; color: #94a3b8; display: block; margin-bottom: 4px; line-height: 1.4;');
-      label.textContent = 'No detectamos la cuenta automáticamente. Escribí el @usuario de TikTok para saber siempre de quién son estos datos:';
-      container.appendChild(label);
-
-      const input = document.createElement('input');
-      input.id = 'ttchop-studio-handle-input';
-      input.type = 'text';
-      input.placeholder = '@tu.usuario';
-      input.value = manualHandle;
-      input.autocomplete = 'off';
-      input.style.cssText = `
-        all: initial;
-        display: block;
-        width: 100%;
-        box-sizing: border-box;
-        padding: 8px;
-        margin-bottom: 6px;
-        border-radius: 6px;
-        border: 1px solid #334155;
-        background: #1e293b;
-        color: #f1f5f9;
-        font-family: system-ui, sans-serif;
-        font-size: 12px;
-      `;
-      input.addEventListener('input', onHandleInputChange);
-      container.appendChild(input);
-    }
-
-    const targetLine = document.createElement('div');
-    targetLine.id = 'ttchop-studio-target-line';
-    styleEl(targetLine, 'font-size: 12px; margin-top: 2px;');
-    container.appendChild(targetLine);
-  }
-
-  // El input no se recrea en cada render (perdería el foco/cursor mientras el usuario tipea),
-  // pero sí puede necesitar sincronizarse con manualHandle cuando ese valor cambió por otra vía
-  // (p. ej. todavía se estaba cargando desde chrome.storage cuando se hizo el primer render).
-  const input = document.getElementById('ttchop-studio-handle-input');
-  if (input && document.activeElement !== input && input.value !== manualHandle) {
-    input.value = manualHandle;
-  }
-
-  const targetLine = document.getElementById('ttchop-studio-target-line');
-  if (!targetLine) return;
-  targetLine.innerHTML = '';
-  const handle = effectiveHandle();
-  if (handle) {
-    targetLine.style.color = '#94a3b8';
-    targetLine.textContent = 'Se va a guardar en la cuenta: ';
-    const strong = document.createElement('strong');
-    strong.style.color = '#6ee7b7';
-    strong.textContent = `@${handle}`;
-    targetLine.appendChild(strong);
-  } else {
-    targetLine.style.color = '#fca5a5';
-    targetLine.textContent = 'Falta el @usuario — no se puede guardar todavía.';
-  }
+  const line = document.createElement('div');
+  styleEl(line, 'font-size: 11px; color: #94a3b8;');
+  line.textContent = 'Cuenta detectada: ';
+  const strong = document.createElement('strong');
+  strong.style.color = '#6ee7b7';
+  strong.textContent = `@${detectedHandle}`;
+  line.appendChild(strong);
+  container.appendChild(line);
 }
 
 function renderStatus(statusEl) {
@@ -497,9 +423,7 @@ function renderPanel() {
 
   const saveBtn = document.getElementById('ttchop-studio-save-btn');
   if (saveBtn) {
-    // Nunca se puede guardar sin un handle: es el dato duradero que dice de qué cuenta son
-    // estos videos, y sin él quedan igual de "huérfanos" que los 50 de @arts.choice.
-    saveBtn.disabled = saving || capturedItems.size === 0 || !effectiveHandle();
+    saveBtn.disabled = saving || capturedItems.size === 0;
     saveBtn.style.opacity = saveBtn.disabled ? '0.6' : '1';
     saveBtn.style.cursor = saveBtn.disabled ? 'not-allowed' : 'pointer';
   }
@@ -514,8 +438,7 @@ function renderPanel() {
 async function onSaveClick() {
   if (saving) return;
   if (capturedItems.size === 0) return;
-  const tiktokUsername = effectiveHandle();
-  if (!tiktokUsername) return; // el botón ya debería estar deshabilitado, pero por si acaso.
+  const tiktokUsername = detectedHandle; // pista opcional: puede ir null, background.js lo maneja.
 
   saving = true;
   panelState = { status: 'saving', message: '', savedCount: 0 };
@@ -530,8 +453,6 @@ async function onSaveClick() {
       panelState = { status: 'success', message: '', savedCount: res.saved || items.length };
     } else if (res && res.error === 'NOT_LOGGED_IN') {
       panelState = { status: 'error', message: 'Iniciá sesión desde el ícono de la extensión primero.', savedCount: 0 };
-    } else if (res && res.error === 'MISSING_USERNAME') {
-      panelState = { status: 'error', message: 'Falta el @usuario de la cuenta — escribilo arriba antes de guardar.', savedCount: 0 };
     } else {
       panelState = { status: 'error', message: (res && res.error) || 'Error al guardar las estadísticas.', savedCount: 0 };
     }
@@ -546,14 +467,10 @@ async function onSaveClick() {
 function init() {
   // Cascada de detección del handle: a) ya lo vio el interceptor de la API (guardado como
   // atributo del DOM, por si su postMessage llegó antes de que este listener existiera) →
-  // b) el estado embebido en el HTML inicial de la página → c) queda en manos del usuario.
+  // b) el estado embebido en el HTML inicial de la página. Si ninguna encuentra nada, no pasa
+  // nada: es solo una pista opcional.
   const fromApi = normalizeHandle(document.documentElement.getAttribute('data-ttchop-handle'));
   detectedHandle = fromApi || extractHandleFromEmbeddedState();
-
-  chrome.storage.local.get(STUDIO_MANUAL_HANDLE_KEY).then(data => {
-    manualHandle = data[STUDIO_MANUAL_HANDLE_KEY] || '';
-    renderPanel();
-  }).catch(() => {});
 
   renderPanel();
   loadAccounts().then(result => {

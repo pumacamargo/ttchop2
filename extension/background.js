@@ -252,9 +252,9 @@ async function createProduct(auth, scraped) {
 const TIKTOK_VIDEOS_COMMIT_BATCH_SIZE = 400; // margen bajo el límite de 500 writes por :commit
 
 // Mismas reglas de normalización que en studio-content.js: sin arroba, sin espacios, en
-// minúsculas. El handle es el dato duradero que dice de qué cuenta son estos videos — se
-// valida acá también (no solo en el content script) porque este es el único lugar que
-// efectivamente escribe en Firestore.
+// minúsculas. El handle es solo una pista opcional (el contenedor es lo que organiza la
+// captura), pero se normaliza acá también porque este es el único lugar que efectivamente
+// escribe en Firestore.
 function normalizeTikTokUsername(raw) {
   if (typeof raw !== 'string') return '';
   return raw.trim().replace(/^@+/, '').replace(/\s+/g, '').toLowerCase();
@@ -264,7 +264,6 @@ function toVideoStatsFields(auth, item, importId, tiktokUsername) {
   const fields = {
     userId: { stringValue: auth.uid },
     itemId: { stringValue: item.itemId },
-    tiktokUsername: { stringValue: tiktokUsername },
     // Apunta al registro en `imports` que trajo este video — el contenedor (General o una
     // cuenta) vive ahí, no en cada video, para que reasignarlo sea UNA escritura. Ver
     // ImportRecord y getEffectiveContainer() en el webapp (containerVisibility.ts).
@@ -280,24 +279,29 @@ function toVideoStatsFields(auth, item, importId, tiktokUsername) {
     capturedAt: { stringValue: new Date().toISOString() }
   };
   if (item.postedAt) fields.postedAt = { stringValue: item.postedAt };
+  // tiktokUsername es una pista opcional: se escribe solo si vino un handle detectado
+  // automáticamente. Campo AUSENTE, nunca cadena vacía.
+  if (tiktokUsername) fields.tiktokUsername = { stringValue: tiktokUsername };
   return fields;
 }
 
 // Registro de importación (colección `imports`) para este lote de capturas — ver ImportRecord
-// en el webapp (databaseService.ts). `label` es el @handle capturado, como pide la Tarea 2.
+// en el webapp (databaseService.ts). `label` es el @handle capturado, cuando hay uno.
 function toImportFields(auth, importId, itemCount, accountId, tiktokUsername) {
   const fields = {
     id: { stringValue: importId },
     userId: { stringValue: auth.uid },
     type: { stringValue: 'studio_scrape' },
-    label: { stringValue: `@${tiktokUsername}` },
     itemCount: { integerValue: String(itemCount) },
-    importedAt: { stringValue: new Date().toISOString() },
-    tiktokUsername: { stringValue: tiktokUsername }
+    importedAt: { stringValue: new Date().toISOString() }
   };
-  // accountId solo se escribe si hay un contenedor de cuenta elegido: el
-  // contenedor "General" se representa como AUSENCIA del campo, nunca ''.
+  // accountId y tiktokUsername/label solo se escriben si hay dato: el handle es una pista
+  // opcional y el contenedor "General" se representa como AUSENCIA del campo, nunca ''.
   if (accountId) fields.accountId = { stringValue: accountId };
+  if (tiktokUsername) {
+    fields.label = { stringValue: `@${tiktokUsername}` };
+    fields.tiktokUsername = { stringValue: tiktokUsername };
+  }
   return fields;
 }
 
@@ -382,14 +386,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse({ ok: false, error: 'NOT_LOGGED_IN' });
           return;
         }
-        // El handle es el punto de todo el cambio: sin él, un video guardado queda igual de
-        // "huérfano" que los 50 de @arts.choice que motivaron esto. Se rechaza el guardado
-        // completo en vez de guardar con un campo vacío.
+        // El handle es una pista opcional (ver toVideoStatsFields/toImportFields): si no vino
+        // ninguno, se guarda igual, sin ese campo.
         const tiktokUsername = normalizeTikTokUsername(message.tiktokUsername);
-        if (!tiktokUsername) {
-          sendResponse({ ok: false, error: 'MISSING_USERNAME' });
-          return;
-        }
         const saved = await saveVideoStats(auth, message.items, message.accountId, tiktokUsername);
         sendResponse({ ok: true, saved });
       }
