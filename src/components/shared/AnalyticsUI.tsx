@@ -1,7 +1,9 @@
 // Small presentational pieces shared between AnalyticsView and DashboardView — both render
 // the same shape of data (currency amounts, category bars, settlement splits) and should look
 // like one system rather than two hand-rolled copies.
-import React from 'react';
+import React, { useRef, useState } from 'react';
+import type { DailyPerformanceBucket, BucketGranularity } from '../../utils/analytics';
+import { formatBucketLabel } from '../../utils/analytics';
 
 export const SectionCard: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div className="glass-card" style={{ padding: '0.9rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
@@ -133,6 +135,107 @@ export const CurrencySelector: React.FC<{
             {c}
           </button>
         ))}
+      </div>
+    </div>
+  );
+};
+
+// ── Gráfica diaria de dos series (Analytics y Dashboard) ────────────────────
+// Dos series diarias — unidades vendidas y videos publicados. Ambas son CONTEOS, así que
+// comparten una sola escala y caben en una gráfica: no hay problema de doble eje aquí.
+export const DailyPerformanceChart: React.FC<{
+  buckets: DailyPerformanceBucket[];
+  granularity: BucketGranularity;
+  emptyText: string;
+  unitsLabel: string;
+  videosLabel: string;
+}> = ({ buckets, granularity, emptyText, unitsLabel, videosLabel }) => {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  if (buckets.length === 0) {
+    return <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0 }}>{emptyText}</p>;
+  }
+
+  const H = 150;
+  const VB_W = 100;
+  const VB_H = 400;
+  const PAD_TOP = 20;
+  const PAD_BOTTOM = 20;
+  const n = buckets.length;
+  const usableH = VB_H - PAD_TOP - PAD_BOTTOM;
+  const maxVal = Math.max(1, ...buckets.map(b => Math.max(b.unitsSold, b.videoCount)));
+
+  const pointsFor = (pick: (b: DailyPerformanceBucket) => number) =>
+    buckets.map((b, i) => ({
+      x: n === 1 ? VB_W / 2 : (i / (n - 1)) * VB_W,
+      y: PAD_TOP + usableH - (pick(b) / maxVal) * usableH,
+    }));
+
+  const pathOf = (pts: { x: number; y: number }[]) =>
+    pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+
+  const unitPts = pointsFor(b => b.unitsSold);
+  const videoPts = pointsFor(b => b.videoCount);
+  const baselineY = VB_H - PAD_BOTTOM;
+
+  const updateHover = (clientX: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    setHoverIndex(Math.round(frac * (n - 1)));
+  };
+
+  const hovered = hoverIndex !== null ? buckets[hoverIndex] : null;
+  const hoverX = hoverIndex !== null ? unitPts[hoverIndex].x : 0;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+        <LegendDot color="var(--secondary)" label={unitsLabel} />
+        <LegendDot color="var(--accent)" label={videosLabel} />
+      </div>
+
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label={`${unitsLabel} / ${videosLabel}`}
+        tabIndex={0}
+        onPointerMove={e => updateHover(e.clientX)}
+        onPointerDown={e => updateHover(e.clientX)}
+        onPointerLeave={() => setHoverIndex(null)}
+        onKeyDown={e => {
+          if (e.key === 'ArrowLeft') { e.preventDefault(); setHoverIndex(i => Math.max(0, (i ?? 0) - 1)); }
+          else if (e.key === 'ArrowRight') { e.preventDefault(); setHoverIndex(i => Math.min(n - 1, (i ?? -1) + 1)); }
+          else if (e.key === 'Escape') setHoverIndex(null);
+        }}
+        style={{ position: 'relative', touchAction: 'pan-y', outline: 'none' }}
+      >
+        <svg viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: H, display: 'block' }} aria-hidden="true">
+          <line x1={0} y1={baselineY} x2={VB_W} y2={baselineY} stroke="var(--border)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          {hoverIndex !== null && (
+            <line x1={hoverX} y1={PAD_TOP} x2={hoverX} y2={baselineY} stroke="var(--text-muted)" strokeWidth={1} vectorEffect="non-scaling-stroke" opacity={0.5} />
+          )}
+          <path d={pathOf(unitPts)} fill="none" stroke="var(--secondary)" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+          <path d={pathOf(videoPts)} fill="none" stroke="var(--accent)" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+        </svg>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+          <span>{formatBucketLabel(buckets[0].date, granularity)}</span>
+          <span>{formatBucketLabel(buckets[n - 1].date, granularity)}</span>
+        </div>
+
+        {hovered && (
+          <div style={{
+            marginTop: '0.4rem', padding: '0.4rem 0.6rem', borderRadius: 8,
+            background: 'var(--bg-card-hover)', border: '1px solid var(--border)',
+            fontSize: '0.72rem', color: 'var(--text-secondary)',
+          }}>
+            <strong style={{ color: 'var(--text-primary)' }}>{formatBucketLabel(hovered.date, granularity)}</strong>
+            {' · '}<span style={{ color: 'var(--secondary)' }}>{unitsLabel}: {hovered.unitsSold}</span>
+            {' · '}<span style={{ color: 'var(--accent)' }}>{videosLabel}: {hovered.videoCount}</span>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -14,14 +14,14 @@ import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
 import type { Translations } from '../i18n';
 import {
-  type Period, type RevenueBucket, type BucketGranularity,
+  type Period,
   filterByPeriod, filterByDateRange, filterRendersByPeriod, getPreviousPeriodRange,
   formatCurrency, computeOrderMetrics, computeDelta, aggregateByProduct, buildVideoRevenue,
-  buildTopTemplate, buildRevenueBuckets, formatBucketLabel,
+  buildTopTemplate, buildDailyPerformanceBuckets, computeCommissionRate,
   templateNameResolver, filterVideoStatsByPeriod, filterVideoStatsByDateRange, computeVideoStatsMetrics,
 } from '../utils/analytics';
 import { useCurrencySelection } from '../hooks/useCurrencySelection';
-import { SectionCard, PeriodSelector, CurrencySelector } from './shared/AnalyticsUI';
+import { SectionCard, PeriodSelector, CurrencySelector, DailyPerformanceChart } from './shared/AnalyticsUI';
 
 // ── KPI card with period-over-period delta ──────────────────────────────────
 
@@ -89,131 +89,6 @@ const HighlightRow: React.FC<{ icon: React.ReactNode; label: string; primary: st
 // ── Growth chart ─────────────────────────────────────────────────────────────
 // Single-series line + area (per dataviz guidance: one series needs no legend — the
 // section title already names it). Thin 2px line, ~10% area wash, hairline baseline,
-// direct end-label, and a nearest-bucket hover/tap crosshair + tooltip.
-
-const CHART_H_PX = 140;
-const VB_W = 100;
-const VB_H = 400;
-const PAD_TOP = 24;
-const PAD_BOTTOM = 24;
-
-const GrowthChart: React.FC<{ buckets: RevenueBucket[]; granularity: BucketGranularity; currency: string; emptyText: string }> = ({
-  buckets, granularity, currency, emptyText,
-}) => {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  if (buckets.length === 0) {
-    return <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0 }}>{emptyText}</p>;
-  }
-
-  const n = buckets.length;
-  const maxRevenue = Math.max(...buckets.map(b => b.revenue), 0);
-  const usableH = VB_H - PAD_TOP - PAD_BOTTOM;
-
-  const points = buckets.map((b, i) => {
-    const xPct = n === 1 ? 50 : (i / (n - 1)) * VB_W;
-    const yUnits = maxRevenue > 0 ? PAD_TOP + usableH - (b.revenue / maxRevenue) * usableH : VB_H - PAD_BOTTOM;
-    return { xPct, yUnits, topPx: (yUnits / VB_H) * CHART_H_PX, bucket: b };
-  });
-
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.xPct.toFixed(2)},${p.yUnits.toFixed(2)}`).join(' ');
-  const baselineY = VB_H - PAD_BOTTOM;
-  const areaPath = `${linePath} L ${points[n - 1].xPct.toFixed(2)},${baselineY} L ${points[0].xPct.toFixed(2)},${baselineY} Z`;
-
-  const updateHoverFromClientX = (clientX: number) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0) return;
-    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    setHoverIndex(Math.round(frac * (n - 1)));
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowLeft') { e.preventDefault(); setHoverIndex(i => Math.max(0, (i ?? 0) - 1)); }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); setHoverIndex(i => Math.min(n - 1, (i ?? -1) + 1)); }
-    else if (e.key === 'Escape') setHoverIndex(null);
-  };
-
-  const hovered = hoverIndex !== null ? points[hoverIndex] : null;
-  const last = points[n - 1];
-  const lastLabelAbove = last.topPx > 28;
-
-  return (
-    <div>
-      <div
-        ref={containerRef}
-        role="img"
-        aria-label={`${formatBucketLabel(last.bucket.date, granularity)}: ${formatCurrency(last.bucket.revenue, currency)}`}
-        tabIndex={0}
-        onPointerMove={e => updateHoverFromClientX(e.clientX)}
-        onPointerDown={e => updateHoverFromClientX(e.clientX)}
-        onPointerLeave={() => setHoverIndex(null)}
-        onKeyDown={handleKeyDown}
-        style={{ position: 'relative', paddingTop: '30px', touchAction: 'pan-y', outline: 'none' }}
-      >
-        <svg viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: CHART_H_PX, display: 'block' }} aria-hidden="true">
-          <line x1={0} y1={baselineY} x2={VB_W} y2={baselineY} stroke="var(--border)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-          <path d={areaPath} fill="var(--primary)" opacity={0.1} stroke="none" />
-          <path d={linePath} fill="none" stroke="var(--primary)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-          {hovered && (
-            <line x1={hovered.xPct} y1={PAD_TOP} x2={hovered.xPct} y2={baselineY} stroke="var(--border)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-          )}
-        </svg>
-
-        {/* End-dot marker (surface ring + fill) */}
-        <div style={{
-          position: 'absolute', left: `${last.xPct}%`, top: last.topPx, transform: 'translate(-50%, -50%)',
-          width: 10, height: 10, borderRadius: '50%', background: 'var(--primary)', border: '2px solid var(--bg-card)',
-        }} />
-        {/* Direct end-label */}
-        <div style={{
-          position: 'absolute', left: `${Math.min(96, Math.max(4, last.xPct))}%`,
-          top: lastLabelAbove ? last.topPx - 10 : last.topPx + 16,
-          transform: `translate(-50%, ${lastLabelAbove ? '-100%' : '0'})`,
-          fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap',
-        }}>
-          {formatCurrency(last.bucket.revenue, currency)}
-        </div>
-
-        {hovered && (
-          <>
-            <div style={{
-              position: 'absolute', left: `${hovered.xPct}%`, top: hovered.topPx, transform: 'translate(-50%, -50%)',
-              width: 10, height: 10, borderRadius: '50%', background: 'var(--primary)', border: '2px solid var(--bg-card)',
-            }} />
-            <div
-              role="status"
-              aria-live="polite"
-              style={{
-                position: 'absolute', left: `${Math.min(92, Math.max(8, hovered.xPct))}%`, top: 0, transform: 'translate(-50%, 0)',
-                background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.25rem 0.5rem',
-                display: 'flex', flexDirection: 'column', gap: 1, boxShadow: 'var(--shadow-lg)', whiteSpace: 'nowrap', pointerEvents: 'none',
-              }}
-            >
-              <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{formatBucketLabel(hovered.bucket.date, granularity)}</span>
-              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {formatCurrency(hovered.bucket.revenue, currency)}
-              </span>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Selective x-axis labels: first / middle / last */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.3rem' }}>
-        <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{formatBucketLabel(buckets[0].date, granularity)}</span>
-        {n > 2 && (
-          <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
-            {formatBucketLabel(buckets[Math.floor((n - 1) / 2)].date, granularity)}
-          </span>
-        )}
-        {n > 1 && (
-          <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{formatBucketLabel(buckets[n - 1].date, granularity)}</span>
-        )}
-      </div>
-    </div>
-  );
-};
 
 // ── Loading skeleton ─────────────────────────────────────────────────────────
 
@@ -327,7 +202,11 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   const previousViewsMetrics = useMemo(() => computeVideoStatsMetrics(previousVideoStats), [previousVideoStats]);
   const viewsDelta = previousVideoStats.length > 0 ? computeDelta(currentViewsMetrics.totalViews, previousViewsMetrics.totalViews) : null;
 
-  const { granularity, buckets } = useMemo(() => buildRevenueBuckets(currencyOrders, period, now), [currencyOrders, period, now]);
+  // Unidades vendidas y videos publicados por día — ambos conteos, una sola escala.
+  const { granularity: dailyPerfGranularity, buckets: dailyPerfBuckets } = useMemo(
+    () => buildDailyPerformanceBuckets(currencyOrders, videoStats, period, now),
+    [currencyOrders, videoStats, period, now]
+  );
 
   const topProductEntry = useMemo(() => {
     const list = aggregateByProduct(periodOrders).sort((a, b) => b.revenue - a.revenue);
@@ -416,8 +295,16 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
             </div>
           ) : (
             <>
-              {/* KPI cards with period-over-period comparison */}
+              {/* Las tres métricas de dinero primero: GMV, comisión, y qué porcentaje del GMV
+                  representa esa comisión. El porcentaje se calcula con los dos números de arriba
+                  para que cuadre si el usuario los divide a mano. */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
+                <KpiCard
+                  label={t.analytics_metric_gmv}
+                  value={formatCurrency(currentMetrics.gmvTotal, selectedCurrency)}
+                  deltaPct={delta(currentMetrics.gmvTotal, previousMetrics.gmvTotal)}
+                  comparisonLabel={comparisonLabel}
+                />
                 <KpiCard
                   label={t.analytics_metric_revenue}
                   value={formatCurrency(currentMetrics.revenueTotal, selectedCurrency)}
@@ -425,11 +312,31 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                   comparisonLabel={comparisonLabel}
                 />
                 <KpiCard
-                  label={t.analytics_metric_gmv}
-                  value={formatCurrency(currentMetrics.gmvTotal, selectedCurrency)}
-                  deltaPct={delta(currentMetrics.gmvTotal, previousMetrics.gmvTotal)}
+                  label={t.analytics_metric_commission_pct}
+                  value={currentMetrics.gmvTotal > 0
+                    ? `${(computeCommissionRate(currentMetrics.revenueTotal, currentMetrics.gmvTotal) * 100).toFixed(1)}%`
+                    : '—'}
+                  deltaPct={delta(
+                    computeCommissionRate(currentMetrics.revenueTotal, currentMetrics.gmvTotal),
+                    computeCommissionRate(previousMetrics.revenueTotal, previousMetrics.gmvTotal),
+                  )}
                   comparisonLabel={comparisonLabel}
                 />
+              </div>
+
+              {/* Gráfica diaria: unidades vendidas y videos publicados */}
+              <SectionCard title={t.analytics_daily_chart_title}>
+                <DailyPerformanceChart
+                  buckets={dailyPerfBuckets}
+                  granularity={dailyPerfGranularity}
+                  emptyText={t.analytics_daily_chart_empty}
+                  unitsLabel={t.analytics_metric_units}
+                  videosLabel={t.analytics_video_metric_published}
+                />
+              </SectionCard>
+
+              {/* El resto de las métricas */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
                 <KpiCard
                   label={t.analytics_metric_units}
                   value={currentMetrics.unitsSold.toLocaleString()}
@@ -449,11 +356,6 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                   comparisonLabel={comparisonLabel}
                 />
               </div>
-
-              {/* Growth chart */}
-              <SectionCard title={t.dashboard_growth_title}>
-                <GrowthChart buckets={buckets} granularity={granularity} currency={selectedCurrency} emptyText={t.dashboard_growth_empty} />
-              </SectionCard>
 
               {/* Highlights */}
               <SectionCard title={t.dashboard_highlights_title}>
