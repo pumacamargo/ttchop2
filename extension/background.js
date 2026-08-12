@@ -245,6 +245,67 @@ async function createProduct(auth, scraped) {
   return { ...product, replaced: false };
 }
 
+// Estadísticas de videos publicados, capturadas desde TikTok Studio.
+// Un doc por video (`{userId}_{itemId}`): cada guardado SOBRESCRIBE el
+// documento entero con el dato más fresco (los contadores cambian con el
+// tiempo, no queremos historial acá, sino la última foto).
+const TIKTOK_VIDEOS_COMMIT_BATCH_SIZE = 400; // margen bajo el límite de 500 writes por :commit
+
+function toVideoStatsFields(auth, item, accountId) {
+  const fields = {
+    userId: { stringValue: auth.uid },
+    itemId: { stringValue: item.itemId },
+    playCount: { integerValue: String(item.playCount || 0) },
+    likeCount: { integerValue: String(item.likeCount || 0) },
+    commentCount: { integerValue: String(item.commentCount || 0) },
+    shareCount: { integerValue: String(item.shareCount || 0) },
+    favoriteCount: { integerValue: String(item.favoriteCount || 0) },
+    durationMs: { integerValue: String(item.durationMs || 0) },
+    desc: { stringValue: item.desc || '' },
+    coverUrl: { stringValue: item.coverUrl || '' },
+    capturedAt: { stringValue: new Date().toISOString() }
+  };
+  if (item.postedAt) fields.postedAt = { stringValue: item.postedAt };
+  // accountId solo se escribe si hay un contenedor de cuenta elegido: el
+  // contenedor "General" se representa como AUSENCIA del campo, nunca ''.
+  if (accountId) fields.accountId = { stringValue: accountId };
+  return fields;
+}
+
+async function saveVideoStats(auth, items, accountId) {
+  if (!Array.isArray(items) || items.length === 0) return 0;
+
+  const documentsBase = `projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+  const writes = items
+    .filter(item => item && item.itemId)
+    .map(item => ({
+      update: {
+        name: `${documentsBase}/tiktok_videos/${auth.uid}_${item.itemId}`,
+        fields: toVideoStatsFields(auth, item, accountId)
+      }
+    }));
+
+  let saved = 0;
+  for (let i = 0; i < writes.length; i += TIKTOK_VIDEOS_COMMIT_BATCH_SIZE) {
+    const batch = writes.slice(i, i + TIKTOK_VIDEOS_COMMIT_BATCH_SIZE);
+    const res = await fetch(`https://firestore.googleapis.com/v1/${documentsBase}:commit`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${auth.idToken}`
+      },
+      body: JSON.stringify({ writes: batch })
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error?.message || `Error al guardar las estadisticas (${res.status})`);
+    }
+    saved += batch.length;
+  }
+  return saved;
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     try {
@@ -273,6 +334,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
         const product = await createProduct(auth, message.product);
         sendResponse({ ok: true, product });
+      } else if (message.type === 'SAVE_VIDEO_STATS') {
+        const auth = await getValidAuth();
+        if (!auth) {
+          sendResponse({ ok: false, error: 'NOT_LOGGED_IN' });
+          return;
+        }
+        const saved = await saveVideoStats(auth, message.items, message.accountId);
+        sendResponse({ ok: true, saved });
       }
     } catch (err) {
       sendResponse({ ok: false, error: err.message });

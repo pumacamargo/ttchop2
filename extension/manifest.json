@@ -25,11 +25,33 @@
       "matches": [
         "https://*.tiktok.com/*"
       ],
+      "exclude_matches": [
+        "https://www.tiktok.com/tiktokstudio/*"
+      ],
       "js": [
         "content.js"
       ],
       "css": [
         "content.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.tiktok.com/tiktokstudio/*"
+      ],
+      "js": [
+        "studio-interceptor.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.tiktok.com/tiktokstudio/*"
+      ],
+      "js": [
+        "studio-content.js"
       ],
       "run_at": "document_idle"
     }

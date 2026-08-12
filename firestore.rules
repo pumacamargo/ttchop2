@@ -95,6 +95,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Estadísticas de videos publicados en TikTok, capturadas desde TikTok
+    // Studio por la extensión de Chrome. Un doc por video (`{userId}_{itemId}`).
+    match /tiktok_videos/{docId} {
+      allow read, delete: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create, update: if request.auth != null && request.auth.uid == request.resource.data.userId;
+    }
+
     // Deny all other access
     match /{document=**} {
       allow read, write: if false;
