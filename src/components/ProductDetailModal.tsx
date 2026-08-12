@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { db } from '../services/databaseService';
-import type { Product } from '../services/databaseService';
-import { ArrowLeft, Trash2, RefreshCw, X, Link, ExternalLink, AlertTriangle, Info, Clapperboard, Film } from 'lucide-react';
+import type { Product, ProductMoveSummary } from '../services/databaseService';
+import { ArrowLeft, Trash2, RefreshCw, X, Link, ExternalLink, AlertTriangle, Info, Clapperboard, Film, ArrowRightLeft, Globe, User, Check } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import { ProductClipsTab } from './ProductClipsTab';
 import { ProductRendersTab } from './ProductRendersTab';
 
@@ -10,6 +11,19 @@ interface ProductDetailModalProps {
   product: Product;
   onClose: () => void;
   onDeleted: () => void;
+  /**
+   * Called after a move that keeps the product visible in the active container (e.g. moved to
+   * general, or the account that's already active) — the caller should refresh its list without
+   * closing this modal. A move that makes the product invisible instead calls `onClose`, which
+   * every current caller already wires to close-and-refresh (same as `onDeleted`).
+   */
+  onProductUpdated?: () => void;
+}
+
+/** A move target the picker can offer: general (`accountId: null`) or one connected account. */
+interface MoveTarget {
+  accountId: string | null;
+  label: string;
 }
 
 type DetailTab = 'info' | 'clips' | 'renders';
@@ -17,8 +31,9 @@ type DetailTab = 'info' | 'clips' | 'renders';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const STALE_THRESHOLD_DAYS = 30;
 
-export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ product, onClose, onDeleted }) => {
+export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ product, onClose, onDeleted, onProductUpdated }) => {
   const t = useT();
+  const { accounts, activeAccountId } = useContainer();
   const [activeTab, setActiveTab] = useState<DetailTab>('info');
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -27,6 +42,78 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ product,
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [showFullTitle, setShowFullTitle] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // --- Move to another container ---
+  const [showMovePicker, setShowMovePicker] = useState(false);
+  const [pendingTarget, setPendingTarget] = useState<MoveTarget | null>(null);
+  const [movePreview, setMovePreview] = useState<ProductMoveSummary | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const [isMoving, setIsMoving] = useState(false);
+  const [moveError, setMoveError] = useState('');
+  const [moveSuccessLabel, setMoveSuccessLabel] = useState('');
+
+  const currentAccount = product.accountId ? accounts.find(a => a.openId === product.accountId) : undefined;
+  const currentContainerLabel = product.accountId
+    ? (currentAccount?.displayName || product.accountId)
+    : t.move_container_current_general;
+
+  // Picking a target closes the picker and loads exact numbers for the confirmation dialog —
+  // sessions/renders counts must never be guessed client-side, `previewProductMove` and the actual
+  // `moveProductToContainer` mutation share the same computation (see databaseService.ts).
+  const handlePickTarget = async (target: MoveTarget) => {
+    setShowMovePicker(false);
+    setPendingTarget(target);
+    setMovePreview(null);
+    setMoveError('');
+    setPreviewError('');
+    setPreviewLoading(true);
+    try {
+      const summary = await db.previewProductMove(product.id, target.accountId);
+      setMovePreview(summary);
+    } catch (err) {
+      setPreviewError(err instanceof Error ? err.message : t.move_container_preview_error);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const cancelMove = () => {
+    setPendingTarget(null);
+    setMovePreview(null);
+    setPreviewError('');
+    setMoveError('');
+  };
+
+  const confirmMove = async () => {
+    if (!pendingTarget) return;
+    setIsMoving(true);
+    setMoveError('');
+    try {
+      await db.moveProductToContainer(product.id, pendingTarget.accountId);
+      // General is visible from every container; a specific account is visible only while it (or
+      // general) is active — see getVisibleForContainer. Anything else means the product just left
+      // the container we're looking at, so showing it here further would be stale.
+      const stillVisible = pendingTarget.accountId === null || pendingTarget.accountId === activeAccountId;
+      const targetLabel = pendingTarget.label;
+      setPendingTarget(null);
+      setMovePreview(null);
+      if (stillVisible) {
+        // The modal stays open here, so it needs its own success cue — same fire-and-forget
+        // timeout pattern as handleShare's "Copied" cue above. The "moved out" branch below
+        // closes the modal instead, which (like onDeleted) is feedback enough on its own.
+        onProductUpdated?.();
+        setMoveSuccessLabel(t.move_container_success.replace('{target}', targetLabel));
+        setTimeout(() => setMoveSuccessLabel(''), 3000);
+      } else {
+        onClose();
+      }
+    } catch (err) {
+      setMoveError(err instanceof Error ? err.message : t.move_container_error);
+    } finally {
+      setIsMoving(false);
+    }
+  };
 
   const shareUrl = `${window.location.origin}/p/${product.id}`;
   const handleShare = () => {
@@ -248,6 +335,43 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ product,
             </div>
           )}
 
+          {/* Move to another container — hidden entirely with zero TikTok accounts connected:
+              there is nowhere else to move a product to. This is a rare action, so it sits
+              discreetly at the end of the tab, next to delete. */}
+          {accounts.length > 0 && (
+            <div style={{ marginBottom: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
+              <p style={{
+                fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase',
+                letterSpacing: '0.06em', margin: '0 0 0.6rem', fontWeight: 700
+              }}>
+                {t.move_container_title}
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', color: 'var(--text-secondary)', minWidth: 0, flex: 1 }}>
+                  {product.accountId
+                    ? <User size={14} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
+                    : <Globe size={14} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentContainerLabel}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowMovePicker(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0,
+                    background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: '8px',
+                    padding: '0 0.75rem', minHeight: '44px', color: 'var(--text-primary)',
+                    fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer'
+                  }}
+                >
+                  <ArrowRightLeft size={14} /> {t.move_container_move_button}
+                </button>
+              </div>
+              {moveSuccessLabel && (
+                <p style={{ margin: '0.5rem 0 0', fontSize: '0.75rem', color: 'var(--success)' }}>{moveSuccessLabel}</p>
+              )}
+            </div>
+          )}
+
           {/* Delete product */}
           {showDeleteConfirm ? (
             <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -374,6 +498,191 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ product,
           </div>
         </div>
       )}
+
+      {/* Move-to-container: pick target */}
+      {showMovePicker && (
+        <div
+          onClick={() => setShowMovePicker(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t.move_container_picker_title}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.25rem'
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="glass-card"
+            style={{ maxWidth: '360px', width: '100%', maxHeight: '85vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.6rem', padding: '1.1rem' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+              <h4 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-primary)' }}>{t.move_container_picker_title}</h4>
+              <button
+                onClick={() => setShowMovePicker(false)}
+                aria-label={t.cancel}
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', flexShrink: 0, minWidth: '44px', minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <MoveTargetOption
+              isCurrent={!product.accountId}
+              icon={<Globe size={16} />}
+              name={t.container_general_name}
+              currentTag={t.move_container_picker_current_tag}
+              onClick={() => handlePickTarget({ accountId: null, label: t.container_general_name })}
+            />
+
+            {accounts.map(account => (
+              <MoveTargetOption
+                key={account.openId}
+                isCurrent={product.accountId === account.openId}
+                icon={<User size={16} />}
+                avatarUrl={account.avatarUrl}
+                name={account.displayName || account.openId}
+                currentTag={t.move_container_picker_current_tag}
+                onClick={() => handlePickTarget({ accountId: account.openId, label: account.displayName || account.openId })}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Move-to-container: confirm, with exact numbers of what moves along */}
+      {pendingTarget && (
+        <div
+          onClick={cancelMove}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t.move_container_confirm_question.replace('{target}', pendingTarget.label)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.25rem'
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="glass-card"
+            style={{ maxWidth: '380px', width: '100%', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}
+          >
+            <h4 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+              {t.move_container_confirm_question.replace('{target}', pendingTarget.label)}
+            </h4>
+
+            {previewLoading && (
+              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <RefreshCw size={14} className="loading-spinner" /> {t.move_container_loading}
+              </p>
+            )}
+
+            {previewError && (
+              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--danger)' }}>{previewError}</p>
+            )}
+
+            {movePreview && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {(movePreview.sessions > 0 || movePreview.renders > 0) && (
+                  <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    {t.move_container_confirm_clips
+                      .replace('{sessions}', String(movePreview.sessions))
+                      .replace('{renders}', String(movePreview.renders))}
+                  </p>
+                )}
+                {movePreview.sessionsLeftBehind > 0 && (
+                  <div style={{
+                    display: 'flex', gap: '0.5rem', alignItems: 'flex-start',
+                    background: 'color-mix(in srgb, var(--warning) 10%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--warning) 40%, transparent)',
+                    borderRadius: '8px', padding: '0.6rem 0.75rem'
+                  }}>
+                    <AlertTriangle size={14} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
+                    <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                      {t.move_container_confirm_shared_left.replace('{count}', String(movePreview.sessionsLeftBehind))}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {moveError && (
+              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--danger)' }}>{moveError}</p>
+            )}
+
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                onClick={confirmMove}
+                disabled={previewLoading || isMoving || !!previewError}
+                className="btn btn-primary"
+                style={{ flex: 1, minHeight: '44px', fontSize: '0.82rem', padding: '0.4rem' }}
+              >
+                {isMoving
+                  ? <><RefreshCw size={12} className="loading-spinner" /> {t.move_container_moving}</>
+                  : moveError ? t.retry : t.move_container_confirm_button}
+              </button>
+              <button
+                onClick={cancelMove}
+                disabled={isMoving}
+                className="btn btn-secondary"
+                style={{ flex: 1, minHeight: '44px', fontSize: '0.82rem', padding: '0.4rem' }}
+              >
+                {t.cancel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };
+
+function MoveTargetOption({ isCurrent, name, avatarUrl, icon, currentTag, onClick }: {
+  isCurrent: boolean;
+  name: string;
+  avatarUrl?: string;
+  icon: React.ReactNode;
+  currentTag: string;
+  onClick: () => void;
+}) {
+  const [avatarBroken, setAvatarBroken] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isCurrent}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '0.65rem', width: '100%', minHeight: '44px',
+        padding: '0.5rem 0.65rem', borderRadius: '10px', border: '1px solid var(--border)',
+        background: isCurrent ? 'var(--primary-glow)' : 'var(--bg-input)',
+        cursor: isCurrent ? 'default' : 'pointer', textAlign: 'left', color: 'var(--text-primary)'
+      }}
+    >
+      {avatarUrl && !avatarBroken ? (
+        <img
+          src={avatarUrl}
+          alt=""
+          onError={() => setAvatarBroken(true)}
+          style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, objectFit: 'cover' }}
+        />
+      ) : (
+        <span style={{
+          width: 32, height: 32, borderRadius: '50%', flexShrink: 0, background: 'var(--bg-card-hover)',
+          color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          {icon}
+        </span>
+      )}
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: '0.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {name}
+        </div>
+        {isCurrent && (
+          <div style={{ fontSize: '0.68rem', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <Check size={10} /> {currentTag}
+          </div>
+        )}
+      </span>
+    </button>
+  );
+}

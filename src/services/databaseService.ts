@@ -12,7 +12,9 @@ import {
   deleteDoc,
   writeBatch,
   arrayRemove,
-  arrayUnion
+  arrayUnion,
+  deleteField,
+  type DocumentReference
 } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
 import type { ParsedAnalyticsOrder } from './analyticsImport';
@@ -58,6 +60,18 @@ export const REGION_LABELS: Record<string, string> = {
   jp: 'Japan',
   mx: 'Mexico'
 };
+
+/**
+ * What moving a product to another container drags along with it. `previewProductMove` computes
+ * this without writing anything (for the confirmation dialog); `moveProductToContainer` computes
+ * the same numbers and then actually applies the move — see the comment on that method for why
+ * both share one computation instead of the confirm dialog guessing at what the mutation will do.
+ */
+export interface ProductMoveSummary {
+  sessions: number;         // clip sessions that move with the product (own to it alone)
+  renders: number;          // renders of this product that move with it
+  sessionsLeftBehind: number; // sessions shared with other products — those stay put, see below
+}
 
 export interface SessionVideo {
   id: string;
@@ -2495,6 +2509,106 @@ class DatabaseService {
 
     const docRef = doc(firestore, 'products', productId);
     await deleteDoc(docRef);
+  }
+
+  /**
+   * Everything tied to `productId` that a container move needs to know about: the clip sessions
+   * that belong ONLY to this product (safe to move with it) and this product's renders. Sessions
+   * linked to more than one product are deliberately excluded here — the other products stay
+   * behind and still need them, see the comment on `moveProductToContainer` — but their count is
+   * still surfaced so the caller can tell the user why. Shared by `previewProductMove` and
+   * `moveProductToContainer` so the confirmation dialog and the actual mutation can never disagree
+   * about what's about to happen.
+   */
+  private async collectProductMoveTargets(userId: string, productId: string): Promise<{ ownSessions: Session[]; sharedSessionsCount: number; renders: Render[] }> {
+    const sessionsQ = query(
+      collection(firestore, 'sessions'),
+      where('userId', '==', userId),
+      where('productIds', 'array-contains', productId)
+    );
+    const rendersQ = query(
+      collection(firestore, 'renders'),
+      where('userId', '==', userId),
+      where('productId', '==', productId)
+    );
+    const [sessionsSnap, rendersSnap] = await Promise.all([getDocs(sessionsQ), getDocs(rendersQ)]);
+    const sessions = sessionsSnap.docs.map(d => d.data() as Session);
+    const renders = rendersSnap.docs.map(d => ({ id: d.id, ...d.data() } as Render));
+    const ownSessions = sessions.filter(s => s.productIds.length === 1);
+    return { ownSessions, sharedSessionsCount: sessions.length - ownSessions.length, renders };
+  }
+
+  /** Fetches `productId`, throwing unless it exists and belongs to `userId` — shared by preview/move below so both agree on ownership and on the product's current container. */
+  private async requireOwnedProduct(userId: string, productId: string): Promise<{ ref: DocumentReference; currentAccountId: string | null }> {
+    const ref = doc(firestore, 'products', productId);
+    const snap = await getDoc(ref);
+    if (!snap.exists() || snap.data().userId !== userId) throw new Error('Product not found');
+    return { ref, currentAccountId: (snap.data().accountId as string | undefined) || null };
+  }
+
+  /** Computes what `moveProductToContainer(productId, targetAccountId)` would move, without writing anything. */
+  async previewProductMove(productId: string, targetAccountId: string | null): Promise<ProductMoveSummary> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+    const { currentAccountId } = await this.requireOwnedProduct(user.uid, productId);
+    if (currentAccountId === (targetAccountId || null)) {
+      return { sessions: 0, renders: 0, sessionsLeftBehind: 0 }; // already there — nothing would move
+    }
+    const { ownSessions, sharedSessionsCount, renders } = await this.collectProductMoveTargets(user.uid, productId);
+    return { sessions: ownSessions.length, renders: renders.length, sessionsLeftBehind: sharedSessionsCount };
+  }
+
+  /**
+   * Moves a product to another container (`null` = general/shared) together with every clip
+   * session and render that belongs to it alone — otherwise the product would land in its new
+   * container unable to generate video, since sessions/renders are what actually holds the clips.
+   * Sessions shared with other products (`productIds.length > 1`) are left behind on purpose: the
+   * products that stay in the old container still depend on them.
+   *
+   * Atomicity: a `writeBatch` commit is all-or-nothing, which is exactly what's needed here — the
+   * alternative (a product doc pointing at container A while its clips point at container B) is
+   * the one outcome this must never produce. A single batch caps at 500 writes, so once a product
+   * has enough linked sessions+renders to exceed that, the writes are split into sequential chunks
+   * — each chunk still commits atomically on its own, but a chunk can no longer be undone if a
+   * *later* chunk fails. That's why the product document's own write is appended LAST, after every
+   * session/render write: the product can only ever move once every one of its clips already has,
+   * so a mid-way failure leaves the product in its OLD container — never a broken new one. And
+   * because `collectProductMoveTargets` re-derives "what needs to move" from `productIds`/
+   * `productId` links (not from `accountId`), calling this again after a partial failure (e.g. via
+   * the UI's retry-on-error) simply re-applies the same target to whatever hasn't moved yet and
+   * converges to a fully consistent state. In practice a single product accumulating 500+ linked
+   * sessions+renders is not expected — the common case is one atomic batch, start to finish.
+   */
+  async moveProductToContainer(productId: string, targetAccountId: string | null): Promise<ProductMoveSummary> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+
+    const { ref: productRef, currentAccountId } = await this.requireOwnedProduct(user.uid, productId);
+    if (currentAccountId === (targetAccountId || null)) {
+      return { sessions: 0, renders: 0, sessionsLeftBehind: 0 }; // already there — nothing to move
+    }
+
+    const { ownSessions, sharedSessionsCount, renders } = await this.collectProductMoveTargets(user.uid, productId);
+
+    // `deleteField()` for "move to general" instead of writing `null`/'' — general means "no
+    // accountId at all" everywhere else in this codebase (see Product.accountId), so moved docs
+    // end up in exactly the same shape as a document that was always general.
+    const accountPatch: Record<string, unknown> = targetAccountId ? { accountId: targetAccountId } : { accountId: deleteField() };
+
+    const writes: { ref: DocumentReference; data: Record<string, unknown> }[] = [
+      ...ownSessions.map(s => ({ ref: doc(firestore, 'sessions', s.id), data: accountPatch })),
+      ...renders.map(r => ({ ref: doc(firestore, 'renders', r.id), data: accountPatch })),
+      { ref: productRef, data: accountPatch }, // last on purpose — see method comment
+    ];
+
+    const FIRESTORE_BATCH_LIMIT = 500;
+    for (let i = 0; i < writes.length; i += FIRESTORE_BATCH_LIMIT) {
+      const batch = writeBatch(firestore);
+      writes.slice(i, i + FIRESTORE_BATCH_LIMIT).forEach(({ ref, data }) => batch.update(ref, data));
+      await batch.commit();
+    }
+
+    return { sessions: ownSessions.length, renders: renders.length, sessionsLeftBehind: sharedSessionsCount };
   }
 
   // --- SESSIONS ---

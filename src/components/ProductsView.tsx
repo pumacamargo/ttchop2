@@ -23,7 +23,12 @@ export const ProductsView: React.FC = () => {
   const fetchProducts = async () => {
     setLoading(true);
     try {
-      setAllProducts(await db.getProducts());
+      const products = await db.getProducts();
+      setAllProducts(products);
+      // Keep the detail modal's product prop in sync when a move refreshes the list without
+      // closing it (product moved but stayed visible — see ProductDetailModal's onProductUpdated).
+      // A no-op when the modal is already closed, since prev is then already null.
+      setSelectedProduct(prev => (prev ? products.find(p => p.id === prev.id) ?? null : prev));
     } catch (err) {
       console.error(err);
       setErrorMsg('Failed to connect to the products database.');
@@ -45,6 +50,7 @@ export const ProductsView: React.FC = () => {
           product={selectedProduct}
           onClose={() => { setSelectedProduct(null); fetchProducts(); }}
           onDeleted={() => { setSelectedProduct(null); fetchProducts(); }}
+          onProductUpdated={fetchProducts}
         />
       </div>
     );
