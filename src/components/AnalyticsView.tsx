@@ -2,14 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart3, Upload, FileSpreadsheet, RefreshCw, ShieldAlert, CheckCircle2,
   AlertTriangle, X, Info, Sparkles, Scissors, Layers, Puzzle, Eye,
-  ArrowUp, ArrowDown, ArrowUpDown, Video as VideoIcon,
+  ArrowUp, ArrowDown, ArrowUpDown, Video as VideoIcon, ClipboardList,
 } from 'lucide-react';
 import { db, getVisibleForContainer } from '../services/databaseService';
-import type { AnalyticsOrder, Render, Template, TikTokVideoStats } from '../services/databaseService';
+import type { AnalyticsOrder, Render, Template, TikTokVideoStats, ImportRecord, ImportContainerRef } from '../services/databaseService';
 import { parseAnalyticsFile, AnalyticsImportError } from '../services/analyticsImport';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
 import type { Translations } from '../i18n';
+import { ManageImportsPanel } from './ManageImportsPanel';
 import {
   type Period, type BucketGranularity, type VideoPerformanceEntry,
   filterByPeriod, formatCurrency, aggregateBy, aggregateByProduct, buildVideoRevenue, computeOrderMetrics,
@@ -183,9 +184,11 @@ export const AnalyticsView: React.FC = () => {
   const [allOrders, setAllOrders] = useState<AnalyticsOrder[]>([]);
   const [allRenders, setAllRenders] = useState<Render[]>([]);
   const [allVideoStats, setAllVideoStats] = useState<TikTokVideoStats[]>([]);
+  const [allImports, setAllImports] = useState<ImportRecord[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [showManageImports, setShowManageImports] = useState(false);
 
   const [period, setPeriod] = useState<Period>('all');
   const [videoSortKey, setVideoSortKey] = useState<VideoSortKey>('views');
@@ -211,14 +214,15 @@ export const AnalyticsView: React.FC = () => {
     setLoading(true);
     setLoadError('');
     try {
-      const [orderRows, renderRows, videoStatsRows, templateRows] = await Promise.all([
-        db.getAnalyticsOrders(), db.getRenders(), db.getTikTokVideoStats(), db.getTemplates(),
+      const [orderRows, renderRows, videoStatsRows, templateRows, importRows] = await Promise.all([
+        db.getAnalyticsOrders(), db.getRenders(), db.getTikTokVideoStats(), db.getTemplates(), db.getImports(),
       ]);
       if (!mountedRef.current) return;
       setAllOrders(orderRows);
       setAllRenders(renderRows);
       setAllVideoStats(videoStatsRows);
       setTemplates(templateRows);
+      setAllImports(importRows);
     } catch (err) {
       console.error(err);
       if (mountedRef.current) setLoadError(t.analytics_error_load);
@@ -232,9 +236,15 @@ export const AnalyticsView: React.FC = () => {
   // Neither analytics_orders, renders, nor tiktok_videos are container-filtered server side (see
   // databaseService.ts) — re-derive on activeAccountId change instead of re-fetching. This is
   // what keeps a TikTok account's sales from mixing with another account's or the general pool.
-  const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId), [allOrders, activeAccountId]);
+  // Orders/videoStats resolve THROUGH their import when they have one (see getEffectiveContainer)
+  // — importsById is what lets reassigning an import's container reflect here immediately.
+  const importsById = useMemo(
+    () => new Map<string, ImportContainerRef>(allImports.map(imp => [imp.id, imp])),
+    [allImports]
+  );
+  const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId, importsById), [allOrders, activeAccountId, importsById]);
   const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
-  const videoStats = useMemo(() => getVisibleForContainer(allVideoStats, activeAccountId), [allVideoStats, activeAccountId]);
+  const videoStats = useMemo(() => getVisibleForContainer(allVideoStats, activeAccountId, importsById), [allVideoStats, activeAccountId, importsById]);
 
   // ── Currency: group by currency, never sum across currencies ──────────────
   const { currencies, selectedCurrency, setSelectedCurrency, currencyOrders } = useCurrencySelection(orders);
@@ -359,7 +369,7 @@ export const AnalyticsView: React.FC = () => {
 
     try {
       const parsed = await parseAnalyticsFile(file);
-      const { newCount, updatedCount } = await db.importAnalyticsOrders(parsed.orders, activeAccountId ?? undefined);
+      const { newCount, updatedCount } = await db.importAnalyticsOrders(parsed.orders, file.name, activeAccountId ?? undefined);
       setImportSummary({
         total: parsed.totalRows,
         created: newCount,
@@ -405,9 +415,18 @@ export const AnalyticsView: React.FC = () => {
 
       {/* ── Import panel ──────────────────────────────────────────────────── */}
       <div className="glass-card" style={{ padding: '0.9rem 1rem', marginBottom: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <FileSpreadsheet size={16} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-          <h4 style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>{t.analytics_import_title}</h4>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FileSpreadsheet size={16} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+            <h4 style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>{t.analytics_import_title}</h4>
+          </div>
+          <button
+            onClick={() => setShowManageImports(true)}
+            className="btn btn-secondary"
+            style={{ width: 'auto', flexShrink: 0, minHeight: '44px', padding: '0 0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem' }}
+          >
+            <ClipboardList size={13} /> {t.manage_imports_button}
+          </button>
         </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>{t.analytics_import_hint}</p>
 
@@ -994,6 +1013,13 @@ export const AnalyticsView: React.FC = () => {
             </>
           )}
         </div>
+      )}
+
+      {showManageImports && (
+        <ManageImportsPanel
+          onClose={() => setShowManageImports(false)}
+          onChanged={loadAll}
+        />
       )}
     </div>
   );

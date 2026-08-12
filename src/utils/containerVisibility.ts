@@ -16,6 +16,37 @@ export function isGeneralContainer(accountId?: string | null): boolean {
   return !accountId;
 }
 
+// ── Manage Imports: container-by-import ─────────────────────────────────────
+// `analytics_orders` and `tiktok_videos` documents no longer carry the container on themselves —
+// reassigning an import of 500 orders needs to be ONE write, not 500 (see PLAN.md "Manage
+// Imports"). Instead each doc carries an `importId` pointing at an `imports/{id}` record, and
+// THAT record has the `accountId`. Documents written before this feature existed have no
+// `importId` at all, so they keep resolving straight from their own `accountId` field — the same
+// tri-state absent/null/'' rule `isGeneralContainer` already enforces, zero migration required.
+
+/** Minimal shape of an `imports/{id}` record needed to resolve a document's effective container. */
+export interface ImportContainerRef {
+  accountId?: string | null;
+}
+
+/**
+ * Resolves the container a document actually lives in: if it has an `importId` AND that import
+ * is present in `importsById`, the import's `accountId` wins; otherwise (no `importId`, or the
+ * import it points to no longer exists) it falls back to the document's own `accountId`. This is
+ * the ONE place that dual-path logic lives — every filtering/display site should call this (or
+ * `getVisibleForContainer` below, which already does) instead of reading `doc.accountId` raw.
+ */
+export function getEffectiveContainer<T extends { accountId?: string | null; importId?: string }>(
+  doc: T,
+  importsById: Map<string, ImportContainerRef>
+): string | null {
+  if (doc.importId) {
+    const imp = importsById.get(doc.importId);
+    if (imp) return imp.accountId || null;
+  }
+  return doc.accountId || null;
+}
+
 /**
  * Filters `docs` down to what's visible in `activeAccountId`'s container:
  *  - General container active (`activeAccountId` is null/undefined) → only general documents.
@@ -26,11 +57,21 @@ export function isGeneralContainer(accountId?: string | null): boolean {
  * Firestore query) — this only ever narrows further by `accountId`, in memory. See the comment
  * on `getVisibleForContainer` re-export in databaseService.ts for why that split (userId in the
  * query, accountId in JS) was the deliberate choice instead of a Firestore OR/`in` query.
+ *
+ * `importsById` is optional and only relevant for collections that can carry `importId`
+ * (`analytics_orders`, `tiktok_videos`) — pass the map built from `db.getImports()` so those
+ * docs resolve through their import instead of their own (possibly absent) `accountId`. Callers
+ * for collections that never had this concept (products, renders, sessions...) simply omit it.
  */
-export function getVisibleForContainer<T extends { accountId?: string | null }>(
+export function getVisibleForContainer<T extends { accountId?: string | null; importId?: string }>(
   docs: T[],
-  activeAccountId: string | null | undefined
+  activeAccountId: string | null | undefined,
+  importsById?: Map<string, ImportContainerRef>
 ): T[] {
-  if (!activeAccountId) return docs.filter(d => isGeneralContainer(d.accountId));
-  return docs.filter(d => isGeneralContainer(d.accountId) || d.accountId === activeAccountId);
+  const effectiveContainer = (d: T): string | null => importsById ? getEffectiveContainer(d, importsById) : (d.accountId || null);
+  if (!activeAccountId) return docs.filter(d => isGeneralContainer(effectiveContainer(d)));
+  return docs.filter(d => {
+    const c = effectiveContainer(d);
+    return isGeneralContainer(c) || c === activeAccountId;
+  });
 }

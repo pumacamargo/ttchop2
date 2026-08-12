@@ -9,7 +9,7 @@ import {
   Package, Video, LayoutTemplate, Scissors, Sparkles, Info,
 } from 'lucide-react';
 import { db, getVisibleForContainer } from '../services/databaseService';
-import type { AnalyticsOrder, Render, Template, TikTokVideoStats } from '../services/databaseService';
+import type { AnalyticsOrder, Render, Template, TikTokVideoStats, ImportRecord, ImportContainerRef } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
 import type { Translations } from '../i18n';
@@ -245,6 +245,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   const [allOrders, setAllOrders] = useState<AnalyticsOrder[]>([]);
   const [allRenders, setAllRenders] = useState<Render[]>([]);
   const [allVideoStats, setAllVideoStats] = useState<TikTokVideoStats[]>([]);
+  const [allImports, setAllImports] = useState<ImportRecord[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -260,14 +261,15 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
     setLoading(true);
     setLoadError('');
     try {
-      const [orderRows, renderRows, templateRows, videoStatsRows] = await Promise.all([
-        db.getAnalyticsOrders(), db.getRenders(), db.getTemplates(), db.getTikTokVideoStats(),
+      const [orderRows, renderRows, templateRows, videoStatsRows, importRows] = await Promise.all([
+        db.getAnalyticsOrders(), db.getRenders(), db.getTemplates(), db.getTikTokVideoStats(), db.getImports(),
       ]);
       if (!mountedRef.current) return;
       setAllOrders(orderRows);
       setAllRenders(renderRows);
       setTemplates(templateRows);
       setAllVideoStats(videoStatsRows);
+      setAllImports(importRows);
     } catch (err) {
       console.error(err);
       if (mountedRef.current) setLoadError(t.dashboard_error_load);
@@ -280,9 +282,14 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
 
   // Neither analytics_orders, renders, nor tiktok_videos are container-filtered server side —
   // re-derive on activeAccountId change instead of re-fetching (same pattern as AnalyticsView).
-  const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId), [allOrders, activeAccountId]);
+  // Orders/videoStats resolve THROUGH their import when they have one — see getEffectiveContainer.
+  const importsById = useMemo(
+    () => new Map<string, ImportContainerRef>(allImports.map(imp => [imp.id, imp])),
+    [allImports]
+  );
+  const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId, importsById), [allOrders, activeAccountId, importsById]);
   const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
-  const videoStats = useMemo(() => getVisibleForContainer(allVideoStats, activeAccountId), [allVideoStats, activeAccountId]);
+  const videoStats = useMemo(() => getVisibleForContainer(allVideoStats, activeAccountId, importsById), [allVideoStats, activeAccountId, importsById]);
 
   const now = useMemo(() => new Date(), []);
 

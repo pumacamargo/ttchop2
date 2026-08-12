@@ -20,7 +20,8 @@ import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, listAll, delete
 import type { ParsedAnalyticsOrder } from './analyticsImport';
 // Pure, framework-free filtering logic lives in utils so every view can unit test it without
 // pulling in Firebase — re-exported here so callers of this service don't need a second import.
-export { getVisibleForContainer, isGeneralContainer } from '../utils/containerVisibility';
+export { getVisibleForContainer, isGeneralContainer, getEffectiveContainer } from '../utils/containerVisibility';
+export type { ImportContainerRef } from '../utils/containerVisibility';
 
 export type VideoSource = 'recorded' | 'ai_generated';
 
@@ -243,9 +244,37 @@ export interface MasterVideo {
 export interface AnalyticsOrder extends ParsedAnalyticsOrder {
   id: string; // same as compositeKey — `${orderId}_${skuId}`
   userId: string;
-  // Container this order line was imported into — see Product.accountId.
+  // Legacy container field — only present on order lines imported before the `imports` collection
+  // existed. New imports leave this absent and stamp `importId` instead; see ImportRecord and
+  // getEffectiveContainer() in containerVisibility.ts for how the two are reconciled at read time.
   accountId?: string;
+  // Points at the `imports/{id}` record this order line came from. Absent on rows imported
+  // before this feature existed — see accountId above.
+  importId?: string;
   importedAt: string;
+}
+
+// ── Manage Imports ───────────────────────────────────────────────────────────
+// One doc per import EVENT (one sales-file upload, or one TikTok Studio "save stats" click) —
+// see PLAN.md "Manage Imports". The container lives HERE, not on every order/video line: moving
+// an import of 500 orders to another account is one write to this doc, not 500. Documents that
+// predate this collection have no `importId` pointing at one, and keep resolving their container
+// from their own (legacy) `accountId` field — see getEffectiveContainer() in containerVisibility.ts.
+export type ImportType = 'sales_file' | 'studio_scrape';
+
+export interface ImportRecord {
+  id: string;
+  userId: string;
+  type: ImportType;
+  // File name for a sales_file import, or the captured "@handle" for a studio_scrape one.
+  label: string;
+  itemCount: number;
+  importedAt: string; // ISO — shown as the group's name, e.g. "Import from Aug 12, 2026, 3:47 PM"
+  // Container this import (and everything it produced) lives in. Absent/undefined = general.
+  accountId?: string;
+  // Passive hint for studio_scrape imports: which TikTok handle the captured data belongs to,
+  // even when that account isn't connected via OAuth — see TikTokVideoStats.tiktokUsername.
+  tiktokUsername?: string;
 }
 
 // ── TikTok Studio video stats (captured by the browser extension) ──────────
@@ -258,9 +287,13 @@ export interface TikTokVideoStats {
   id: string; // `${userId}_${itemId}`
   userId: string;
   itemId: string;
-  // Container this capture lives in — see Product.accountId. Absent when captured before an
-  // account was linked to a container, or the extension didn't know which one to tag it with.
+  // Legacy container field — only present on captures saved before the `imports` collection
+  // existed. New captures leave this absent and stamp `importId` instead — see ImportRecord and
+  // getEffectiveContainer() in containerVisibility.ts for how the two are reconciled at read time.
   accountId?: string;
+  // Points at the `imports/{id}` record this capture batch came from. Absent on captures saved
+  // before this feature existed — see accountId above.
+  importId?: string;
   // The TikTok handle (no '@') this capture belongs to, e.g. 'arts.choice'. This is the durable
   // "whose data is this" field: unlike accountId, it does not depend on the account ever being
   // connected via OAuth. Absent only for captures taken before this field existed.
@@ -3639,6 +3672,97 @@ class DatabaseService {
     return response.json();
   }
 
+  // ── Manage Imports ────────────────────────────────────────────────────────
+  // CRUD for the `imports` collection — see ImportRecord above for the model and why the
+  // container lives on the import instead of on every document it produced.
+
+  async getImports(): Promise<ImportRecord[]> {
+    const user = auth.currentUser;
+    if (!user) return [];
+    const q = query(collection(firestore, 'imports'), where('userId', '==', user.uid));
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as ImportRecord))
+      .sort((a, b) => new Date(b.importedAt).getTime() - new Date(a.importedAt).getTime());
+  }
+
+  async createImport(data: Omit<ImportRecord, 'id' | 'userId'>): Promise<ImportRecord> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const id = `import_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const record: ImportRecord = { ...data, id, userId: user.uid };
+    await setDoc(doc(firestore, 'imports', id), stripUndefined(record));
+    return record;
+  }
+
+  /** `accountId` undefined/omitted moves the import (and everything in it) back to general. */
+  async updateImportContainer(importId: string, accountId?: string): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    await updateDoc(doc(firestore, 'imports', importId), accountId ? { accountId } : { accountId: deleteField() });
+  }
+
+  /**
+   * Deletes an import AND every document it produced (analytics_orders rows or tiktok_videos
+   * captures, depending on the import's `type`), batched at Firestore's 500-writes-per-batch
+   * limit. Destructive — the caller must confirm with the user (with the record count) first;
+   * see ManageImportsPanel. Child documents are deleted before the import record itself so a
+   * failure partway through never leaves an import that looks gone but still has data attached.
+   */
+  async deleteImport(importId: string): Promise<{ deletedCount: number }> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const importRef = doc(firestore, 'imports', importId);
+    const importSnap = await getDoc(importRef);
+    if (!importSnap.exists()) throw new Error('Import not found');
+    const importData = importSnap.data() as ImportRecord;
+    if (importData.userId !== user.uid) throw new Error('Not authorized');
+
+    // Same in-memory-filter approach as getVisibleForContainer/getEffectiveContainer: a few
+    // hundred docs per user at most, so one userId-scoped query + a JS filter on importId is
+    // simpler than maintaining a composite index for the equivalent Firestore query.
+    const refs: DocumentReference[] = importData.type === 'sales_file'
+      ? (await getDocs(collection(firestore, 'analytics_orders', user.uid, 'orders')))
+          .docs.filter(d => d.data().importId === importId).map(d => d.ref)
+      : (await getDocs(query(collection(firestore, 'tiktok_videos'), where('userId', '==', user.uid))))
+          .docs.filter(d => d.data().importId === importId).map(d => d.ref);
+
+    const BATCH_LIMIT = 500;
+    for (let i = 0; i < refs.length; i += BATCH_LIMIT) {
+      const batch = writeBatch(firestore);
+      refs.slice(i, i + BATCH_LIMIT).forEach(ref => batch.delete(ref));
+      await batch.commit();
+    }
+    await deleteDoc(importRef);
+
+    return { deletedCount: refs.length };
+  }
+
+  /**
+   * Reassigns every document of `type` that has NO `importId` (i.e. predates this feature) to a
+   * new container, batched at 500 writes per commit. This is the one case where a container
+   * reassignment writes to every affected document instead of a single import record — there is
+   * no import for these documents to point at. See ManageImportsPanel's "earlier imports" group.
+   */
+  async reassignLegacyContainer(type: ImportType, accountId?: string): Promise<number> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+
+    const refs: DocumentReference[] = type === 'sales_file'
+      ? (await getDocs(collection(firestore, 'analytics_orders', user.uid, 'orders')))
+          .docs.filter(d => !d.data().importId).map(d => d.ref)
+      : (await getDocs(query(collection(firestore, 'tiktok_videos'), where('userId', '==', user.uid))))
+          .docs.filter(d => !d.data().importId).map(d => d.ref);
+
+    const BATCH_LIMIT = 500;
+    for (let i = 0; i < refs.length; i += BATCH_LIMIT) {
+      const batch = writeBatch(firestore);
+      refs.slice(i, i + BATCH_LIMIT).forEach(ref => batch.update(ref, accountId ? { accountId } : { accountId: deleteField() }));
+      await batch.commit();
+    }
+    return refs.length;
+  }
+
   // ── Analytics: TikTok Shop order import ──────────────────────────────────
   // One document per order line under analytics_orders/{userId}/orders/{orderId}_{skuId}.
   // The composite id makes re-importing the same file idempotent (setDoc overwrites
@@ -3652,13 +3776,24 @@ class DatabaseService {
     return snap.docs.map(d => ({ id: d.id, ...d.data() } as AnalyticsOrder));
   }
 
-  // `accountId` defaults to undefined (general container) — see saveProduct.
-  async importAnalyticsOrders(orders: ParsedAnalyticsOrder[], accountId?: string): Promise<{ newCount: number; updatedCount: number }> {
+  // Creates an `imports` record for this upload (see ImportRecord) and stamps its id onto every
+  // order line — the container itself lives on that import record, not on each order (see
+  // "Manage Imports" in PLAN.md). `accountId` defaults to undefined (general container).
+  async importAnalyticsOrders(orders: ParsedAnalyticsOrder[], label: string, accountId?: string): Promise<{ newCount: number; updatedCount: number; importId: string }> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
 
     const existingKeys = new Set((await this.getAnalyticsOrders()).map(o => o.id));
     const now = new Date().toISOString();
+
+    const importRecord = await this.createImport({
+      type: 'sales_file',
+      label,
+      itemCount: orders.length,
+      importedAt: now,
+      ...(accountId && { accountId }),
+    });
+
     let newCount = 0;
     let updatedCount = 0;
 
@@ -3668,13 +3803,13 @@ class DatabaseService {
       const batch = writeBatch(firestore);
       chunk.forEach(order => {
         const ref = doc(firestore, 'analytics_orders', user.uid, 'orders', order.compositeKey);
-        batch.set(ref, { ...order, id: order.compositeKey, userId: user.uid, ...(accountId && { accountId }), importedAt: now });
+        batch.set(ref, { ...order, id: order.compositeKey, userId: user.uid, importId: importRecord.id, importedAt: now });
         if (existingKeys.has(order.compositeKey)) updatedCount++; else newCount++;
       });
       await batch.commit();
     }
 
-    return { newCount, updatedCount };
+    return { newCount, updatedCount, importId: importRecord.id };
   }
 
   // ── TikTok Studio video stats (captured by the browser extension) ────────

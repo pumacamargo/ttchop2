@@ -5,6 +5,7 @@ import {
 import { db, getVisibleForContainer } from '../services/databaseService';
 import type {
   AnalyticsOrder, Render, BrandConcept, ReportHistoryEntry, ReportOrderSummary, ReportRenderInfo,
+  ImportContainerRef,
 } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
@@ -108,14 +109,17 @@ export const ReportsView: React.FC = () => {
     setLoading(true);
     setLoadError('');
     try {
-      const [orderRows, renderRows, concept, calStrategy, historyRows] = await Promise.all([
+      const [orderRows, renderRows, concept, calStrategy, historyRows, importRows] = await Promise.all([
         db.getAnalyticsOrders(),
         db.getRenders(),
         db.getBrandConcept(activeAccountId ?? undefined),
         db.getCalendarStrategy(activeAccountId ?? undefined),
         db.getReportHistory(),
+        db.getImports(),
       ]);
-      setOrders(getVisibleForContainer(orderRows, activeAccountId));
+      // Orders resolve THROUGH their import when they have one — see getEffectiveContainer.
+      const importsById = new Map<string, ImportContainerRef>(importRows.map(imp => [imp.id, imp]));
+      setOrders(getVisibleForContainer(orderRows, activeAccountId, importsById));
       setRenders(getVisibleForContainer(renderRows, activeAccountId));
       setBrandConcept(concept);
       setStrategy(calStrategy?.strategy ?? '');

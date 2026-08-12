@@ -102,6 +102,14 @@ service cloud.firestore {
       allow create, update: if request.auth != null && request.auth.uid == request.resource.data.userId;
     }
 
+    // Manage Imports: one doc per import event (sales file upload or TikTok Studio capture) —
+    // the container for a whole import lives here so reassigning it is one write, not one per
+    // order/video row it produced. Same userId-scoped pattern as products/renders/etc.
+    match /imports/{docId} {
+      allow read, delete: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create, update: if request.auth != null && request.auth.uid == request.resource.data.userId;
+    }
+
     // Deny all other access
     match /{document=**} {
       allow read, write: if false;

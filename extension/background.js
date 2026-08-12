@@ -260,11 +260,15 @@ function normalizeTikTokUsername(raw) {
   return raw.trim().replace(/^@+/, '').replace(/\s+/g, '').toLowerCase();
 }
 
-function toVideoStatsFields(auth, item, accountId, tiktokUsername) {
+function toVideoStatsFields(auth, item, importId, tiktokUsername) {
   const fields = {
     userId: { stringValue: auth.uid },
     itemId: { stringValue: item.itemId },
     tiktokUsername: { stringValue: tiktokUsername },
+    // Apunta al registro en `imports` que trajo este video — el contenedor (General o una
+    // cuenta) vive ahí, no en cada video, para que reasignarlo sea UNA escritura. Ver
+    // ImportRecord y getEffectiveContainer() en el webapp (containerVisibility.ts).
+    importId: { stringValue: importId },
     playCount: { integerValue: String(item.playCount || 0) },
     likeCount: { integerValue: String(item.likeCount || 0) },
     commentCount: { integerValue: String(item.commentCount || 0) },
@@ -276,6 +280,21 @@ function toVideoStatsFields(auth, item, accountId, tiktokUsername) {
     capturedAt: { stringValue: new Date().toISOString() }
   };
   if (item.postedAt) fields.postedAt = { stringValue: item.postedAt };
+  return fields;
+}
+
+// Registro de importación (colección `imports`) para este lote de capturas — ver ImportRecord
+// en el webapp (databaseService.ts). `label` es el @handle capturado, como pide la Tarea 2.
+function toImportFields(auth, importId, itemCount, accountId, tiktokUsername) {
+  const fields = {
+    id: { stringValue: importId },
+    userId: { stringValue: auth.uid },
+    type: { stringValue: 'studio_scrape' },
+    label: { stringValue: `@${tiktokUsername}` },
+    itemCount: { integerValue: String(itemCount) },
+    importedAt: { stringValue: new Date().toISOString() },
+    tiktokUsername: { stringValue: tiktokUsername }
+  };
   // accountId solo se escribe si hay un contenedor de cuenta elegido: el
   // contenedor "General" se representa como AUSENCIA del campo, nunca ''.
   if (accountId) fields.accountId = { stringValue: accountId };
@@ -285,33 +304,46 @@ function toVideoStatsFields(auth, item, accountId, tiktokUsername) {
 async function saveVideoStats(auth, items, accountId, tiktokUsername) {
   if (!Array.isArray(items) || items.length === 0) return 0;
 
-  const documentsBase = `projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
-  const writes = items
-    .filter(item => item && item.itemId)
-    .map(item => ({
-      update: {
-        name: `${documentsBase}/tiktok_videos/${auth.uid}_${item.itemId}`,
-        fields: toVideoStatsFields(auth, item, accountId, tiktokUsername)
-      }
-    }));
+  const validItems = items.filter(item => item && item.itemId);
+  if (validItems.length === 0) return 0;
 
+  const documentsBase = `projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+  const importId = `import_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  const videoWrites = validItems.map(item => ({
+    update: {
+      name: `${documentsBase}/tiktok_videos/${auth.uid}_${item.itemId}`,
+      fields: toVideoStatsFields(auth, item, importId, tiktokUsername)
+    }
+  }));
+  const importWrite = {
+    update: {
+      name: `${documentsBase}/imports/${importId}`,
+      fields: toImportFields(auth, importId, validItems.length, accountId, tiktokUsername)
+    }
+  };
+
+  // El registro de importación va SIEMPRE en el primer :commit, junto con sus videos — así, si
+  // el lote entra en un solo commit (el caso común, ver TIKTOK_VIDEOS_COMMIT_BATCH_SIZE), no
+  // puede quedar una importación sin videos ni videos sin su importación.
   let saved = 0;
-  for (let i = 0; i < writes.length; i += TIKTOK_VIDEOS_COMMIT_BATCH_SIZE) {
-    const batch = writes.slice(i, i + TIKTOK_VIDEOS_COMMIT_BATCH_SIZE);
+  for (let i = 0; i < videoWrites.length; i += TIKTOK_VIDEOS_COMMIT_BATCH_SIZE) {
+    const chunk = videoWrites.slice(i, i + TIKTOK_VIDEOS_COMMIT_BATCH_SIZE);
+    const writes = i === 0 ? [importWrite, ...chunk] : chunk;
     const res = await fetch(`https://firestore.googleapis.com/v1/${documentsBase}:commit`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${auth.idToken}`
       },
-      body: JSON.stringify({ writes: batch })
+      body: JSON.stringify({ writes })
     });
 
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error?.message || `Error al guardar las estadisticas (${res.status})`);
     }
-    saved += batch.length;
+    saved += chunk.length;
   }
   return saved;
 }
