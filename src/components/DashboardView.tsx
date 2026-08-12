@@ -232,9 +232,9 @@ const DashboardSkeleton: React.FC = () => (
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 const PERIOD_COMPARISON_KEY: Record<Period, keyof Translations | null> = {
-  week: 'dashboard_vs_previous_week',
-  month: 'dashboard_vs_previous_month',
-  year: 'dashboard_vs_previous_year',
+  d7: 'dashboard_vs_previous_d7',
+  d30: 'dashboard_vs_previous_d30',
+  m6: 'dashboard_vs_previous_m6',
   all: null,
 };
 
@@ -249,7 +249,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [period, setPeriod] = useState<Period>('week');
+  const [period, setPeriod] = useState<Period>('all');
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -392,9 +392,9 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
             value={period}
             onChange={p => setPeriod(p as Period)}
             options={[
-              { key: 'week', label: t.analytics_period_week },
-              { key: 'month', label: t.analytics_period_month },
-              { key: 'year', label: t.analytics_period_year },
+              { key: 'd7', label: t.analytics_period_d7 },
+              { key: 'd30', label: t.analytics_period_d30 },
+              { key: 'm6', label: t.analytics_period_m6 },
               { key: 'all', label: t.analytics_period_all },
             ]}
           />

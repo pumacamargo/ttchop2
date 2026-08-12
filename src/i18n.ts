@@ -259,9 +259,9 @@ const t = {
     dashboard_top_videos_title:       'Top videos',
     dashboard_col_product:            'Product',
     dashboard_col_units:              'Units',
-    dashboard_vs_previous_week:       'vs last week',
-    dashboard_vs_previous_month:      'vs last month',
-    dashboard_vs_previous_year:       'vs last year',
+    dashboard_vs_previous_d7:         'vs previous 7 days',
+    dashboard_vs_previous_d30:        'vs previous 30 days',
+    dashboard_vs_previous_m6:         'vs previous 6 months',
     dashboard_metric_views:           'Views',
     // Analytics
     analytics_title:        'Analytics',
@@ -319,9 +319,9 @@ const t = {
     manage_imports_legacy_reassigning:     'Reassigning… this can take a moment.',
     manage_imports_legacy_reassign_error:  'Could not reassign these records. Please try again.',
     // Analytics — periods
-    analytics_period_week:  'This week',
-    analytics_period_month: 'This month',
-    analytics_period_year:  'This year',
+    analytics_period_d7:    '7 days',
+    analytics_period_d30:   '30 days',
+    analytics_period_m6:    '6 months',
     analytics_period_all:   'Max',
     analytics_no_data_period: 'No orders in this period.',
     // Analytics — currency
@@ -794,9 +794,9 @@ const t = {
     dashboard_top_videos_title:       'Top videos',
     dashboard_col_product:            'Producto',
     dashboard_col_units:              'Unidades',
-    dashboard_vs_previous_week:       'vs. semana anterior',
-    dashboard_vs_previous_month:      'vs. mes anterior',
-    dashboard_vs_previous_year:       'vs. año anterior',
+    dashboard_vs_previous_d7:         'vs. 7 días anteriores',
+    dashboard_vs_previous_d30:        'vs. 30 días anteriores',
+    dashboard_vs_previous_m6:         'vs. 6 meses anteriores',
     dashboard_metric_views:           'Views',
     // Analytics
     analytics_title:        'Analíticas',
@@ -854,9 +854,9 @@ const t = {
     manage_imports_legacy_reassigning:     'Reasignando… esto puede tardar un momento.',
     manage_imports_legacy_reassign_error:  'No se pudieron reasignar estos registros. Intenta de nuevo.',
     // Analytics — periods
-    analytics_period_week:  'Esta semana',
-    analytics_period_month: 'Este mes',
-    analytics_period_year:  'Este año',
+    analytics_period_d7:    '7 días',
+    analytics_period_d30:   '30 días',
+    analytics_period_m6:    '6 meses',
     analytics_period_all:   'Máximo',
     analytics_no_data_period: 'Sin órdenes en este período.',
     // Analytics — currency
@@ -1329,9 +1329,9 @@ const t = {
     dashboard_top_videos_title:       'トップ動画',
     dashboard_col_product:            '商品',
     dashboard_col_units:              '販売数',
-    dashboard_vs_previous_week:       '前週比',
-    dashboard_vs_previous_month:      '前月比',
-    dashboard_vs_previous_year:       '前年比',
+    dashboard_vs_previous_d7:         '直前の7日間と比較',
+    dashboard_vs_previous_d30:        '直前の30日間と比較',
+    dashboard_vs_previous_m6:         '直前の6か月と比較',
     dashboard_metric_views:           '再生数',
     // Analytics
     analytics_title:        'アナリティクス',
@@ -1389,9 +1389,9 @@ const t = {
     manage_imports_legacy_reassigning:     '再割り当て中…少し時間がかかることがあります。',
     manage_imports_legacy_reassign_error:  'これらのレコードを再割り当てできませんでした。もう一度お試しください。',
     // Analytics — periods
-    analytics_period_week:  '今週',
-    analytics_period_month: '今月',
-    analytics_period_year:  '今年',
+    analytics_period_d7:    '7日間',
+    analytics_period_d30:   '30日間',
+    analytics_period_m6:    '6か月',
     analytics_period_all:   '全期間',
     analytics_no_data_period: 'この期間の注文はありません。',
     // Analytics — currency

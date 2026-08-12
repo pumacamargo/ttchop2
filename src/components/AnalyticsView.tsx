@@ -535,9 +535,9 @@ export const AnalyticsView: React.FC = () => {
             value={period}
             onChange={p => setPeriod(p as Period)}
             options={[
-              { key: 'week', label: t.analytics_period_week },
-              { key: 'month', label: t.analytics_period_month },
-              { key: 'year', label: t.analytics_period_year },
+              { key: 'd7', label: t.analytics_period_d7 },
+              { key: 'd30', label: t.analytics_period_d30 },
+              { key: 'm6', label: t.analytics_period_m6 },
               { key: 'all', label: t.analytics_period_all },
             ]}
           />

@@ -4,48 +4,53 @@
 // that touches that math lives here once instead of being reimplemented per view.
 import type { AnalyticsOrder, Render, TikTokVideoStats } from '../services/databaseService';
 
-export type Period = 'week' | 'month' | 'year' | 'all';
+export type Period = 'd7' | 'd30' | 'm6' | 'all';
 
 // ── Date helpers (period filtering) ─────────────────────────────────────────
 //
-// Todas las fronteras se calculan en UTC porque las fechas del export se guardan como hora de
-// pared anclada a UTC (ver parseTikTokDate). Mezclarlas con fronteras en hora local metería un
-// desfase del tamaño del offset del usuario y movería órdenes de un período a otro.
+// Son VENTANAS MÓVILES, no periodos de calendario. Un periodo de calendario compara bloques de
+// tamaño distinto — el día 3 del mes son 3 días contra los 31 del mes pasado — y ese porcentaje
+// de cambio engaña. Una ventana móvil siempre compara bloques iguales.
+//
+// Todo se calcula en UTC porque las fechas del export se guardan como hora de pared anclada a UTC
+// (ver parseTikTokDate). Mezclarlas con fronteras en hora local metería un desfase del tamaño del
+// offset del usuario y movería órdenes de un período a otro.
 
-export function startOfWeekMonday(d: Date): Date {
-  const nd = new Date(d);
-  const day = nd.getUTCDay(); // 0 = domingo
-  const diff = day === 0 ? -6 : 1 - day;
-  nd.setUTCDate(nd.getUTCDate() + diff);
-  nd.setUTCHours(0, 0, 0, 0);
-  return nd;
-}
-export function startOfMonth(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-}
-export function startOfYear(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+/** Cuántos días abarca la ventana. Null para 'm6', que se mide en meses, y para 'all'. */
+const PERIOD_DAYS: Partial<Record<Period, number>> = { d7: 7, d30: 30 };
+
+function shiftDays(d: Date, days: number): Date {
+  return new Date(d.getTime() + days * 86_400_000);
 }
 
-/** Start of the given period containing `now`. Null for 'all' (no lower bound). */
+/**
+ * Resta meses en UTC conservando el día cuando existe. Restar 6 meses al 31 de agosto daría el 31
+ * de febrero, que Date desbordaría al 2 o 3 de marzo; aquí se recorta al último día del mes destino
+ * para que la ventana no se alargue sola.
+ */
+function shiftMonths(d: Date, months: number): Date {
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + months;
+  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(
+    y, m, Math.min(d.getUTCDate(), lastDay),
+    d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds(),
+  ));
+}
+
+/** Inicio de la ventana que termina en `now`. Null para 'all' (sin límite inferior). */
 export function getPeriodCutoff(period: Period, now: Date): Date | null {
   if (period === 'all') return null;
-  return period === 'week' ? startOfWeekMonday(now) : period === 'month' ? startOfMonth(now) : startOfYear(now);
+  const days = PERIOD_DAYS[period];
+  return days !== undefined ? shiftDays(now, -days) : shiftMonths(now, -6);
 }
 
-/** The equivalent previous period's [start, end) range. Null for 'all' — there is no "previous" for all-time. */
+/** La ventana inmediatamente anterior, del MISMO tamaño. Null para 'all' — no hay "anterior". */
 export function getPreviousPeriodRange(period: Period, now: Date): { start: Date; end: Date } | null {
   if (period === 'all') return null;
   const end = getPeriodCutoff(period, now) as Date;
-  let start: Date;
-  if (period === 'week') {
-    start = new Date(end);
-    start.setUTCDate(start.getUTCDate() - 7);
-  } else if (period === 'month') {
-    start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 1, 1));
-  } else {
-    start = new Date(Date.UTC(end.getUTCFullYear() - 1, 0, 1));
-  }
+  const days = PERIOD_DAYS[period];
+  const start = days !== undefined ? shiftDays(end, -days) : shiftMonths(end, -6);
   return { start, end };
 }
 
@@ -415,7 +420,8 @@ export function buildTopTemplate(renders: Render[]): { templateId: string; count
 export type BucketGranularity = 'day' | 'month';
 
 export function bucketGranularityForPeriod(period: Period): BucketGranularity {
-  return period === 'year' || period === 'all' ? 'month' : 'day';
+  // 7 y 30 días se ven por día; 6 meses y máximo por mes, si no serían cientos de barras.
+  return period === 'm6' || period === 'all' ? 'month' : 'day';
 }
 
 export interface RevenueBucket {
@@ -424,7 +430,9 @@ export interface RevenueBucket {
   revenue: number; // settled revenue only, matching the Revenue KPI
 }
 
-const MAX_BUCKETS = 36; // safeguard for very long histories under 'all'
+// Tope de barras: 30 días dan 30 buckets y 6 meses dan 7; el límite solo protege a 'all',
+// que no tiene frontera inferior y podría abarcar años.
+const MAX_BUCKETS = 36;
 
 /** Human-readable label for a bucket's start date — day-granularity gets "Jun 30", month-granularity gets "Jun 2026". Always UTC: bucket dates are wall-clock-anchored-to-UTC (see parseTikTokDate), so formatting in the viewer's local zone could shift the displayed day/month. */
 export function formatBucketLabel(date: Date, granularity: BucketGranularity): string {
@@ -455,7 +463,10 @@ function buildBucketSkeleton(period: Period, now: Date, sourceDates: Date[]): { 
   if (period === 'all') {
     if (sourceDates.length === 0) return { granularity, buckets: [] };
     const minTime = Math.min(...sourceDates.map(d => d.getTime()));
-    start = granularity === 'month' ? startOfMonth(new Date(minTime)) : new Date(minTime);
+    const min = new Date(minTime);
+    start = granularity === 'month'
+      ? new Date(Date.UTC(min.getUTCFullYear(), min.getUTCMonth(), 1))
+      : min;
   } else {
     start = getPeriodCutoff(period, now) as Date;
   }
