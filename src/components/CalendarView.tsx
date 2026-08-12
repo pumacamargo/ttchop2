@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Plus, X, Clock, Trash2, RefreshCw, Pencil, Copy, Sparkles, Scissors, Layers, Play, Share2, Upload } from 'lucide-react';
-import { db, getVisibleForContainer } from '../services/databaseService';
+import { db, getVisibleForContainer, isGeneralContainer } from '../services/databaseService';
 import type { Product, Session, Template, ScheduledRender, Render } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
 import { CalendarStrategyPanel } from './CalendarStrategyPanel';
 import { TikTokUploadModal } from './TikTokUploadModal';
+import { MoveToContainerMenu } from './MoveToContainerMenu';
 import { scheduledAtUTC } from '../utils/calendarTime';
 
 // ── Timezones ────────────────────────────────────────────────────────────────
@@ -67,7 +68,7 @@ const EMPTY_FORM: NewJobForm = {
 };
 
 // ── Render row inside day panel ───────────────────────────────────────────────
-function DayRenderRow({ render: r, onUploaded }: { render: Render; onUploaded: () => void }) {
+function DayRenderRow({ render: r, productAccountId, onUploaded, onMoved }: { render: Render; productAccountId: string | null; onUploaded: () => void; onMoved: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -93,6 +94,18 @@ function DayRenderRow({ render: r, onUploaded }: { render: Render; onUploaded: (
         <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)', flexShrink: 0 }}>
           {new Date(r.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
         </span>
+        <MoveToContainerMenu
+          currentAccountId={r.accountId}
+          onMove={target => db.moveRenderToContainer(r.id, target)}
+          onMoved={onMoved}
+          itemLabel={t.move_render_item_label}
+          ariaLabel={t.move_container_action_label}
+          getWarning={target => (
+            !isGeneralContainer(productAccountId) && productAccountId !== (target || null)
+              ? t.move_container_product_warning
+              : null
+          )}
+        />
       </div>
       {r.status === 'processing' && (
         <div style={{ fontSize: '0.65rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -177,6 +190,10 @@ export function CalendarView() {
   const sessions   = useMemo(() => getVisibleForContainer(allSessions, activeAccountId), [allSessions, activeAccountId]);
   const scheduled  = useMemo(() => getVisibleForContainer(allScheduled, activeAccountId), [allScheduled, activeAccountId]);
   const renders    = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
+  // Container a product itself lives in, keyed by id — lets MoveToContainerMenu warn when moving a
+  // render/job would land it somewhere its (denormalized) product isn't visible from. Built from
+  // the unfiltered `allProducts` (not `products`) since the lookup must work for ANY container.
+  const productAccountById = useMemo(() => new Map(allProducts.map(p => [p.id, p.accountId ?? null])), [allProducts]);
 
   // Form state
   const [nowStr, setNowStr] = useState('');
@@ -511,6 +528,19 @@ export function CalendarView() {
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
+                <MoveToContainerMenu
+                  currentAccountId={job.accountId}
+                  onMove={target => db.moveScheduledRenderToContainer(job.id, target)}
+                  onMoved={loadData}
+                  itemLabel={t.move_scheduled_item_label}
+                  ariaLabel={t.move_container_action_label}
+                  getWarning={target => {
+                    const productAccountId = productAccountById.get(job.productId) ?? null;
+                    return !isGeneralContainer(productAccountId) && productAccountId !== (target || null)
+                      ? t.move_container_product_warning
+                      : null;
+                  }}
+                />
                 <button onClick={() => handleDuplicate(job)} title={t.cal_duplicate}
                   style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center' }}>
                   <Copy size={13} />
@@ -545,7 +575,13 @@ export function CalendarView() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
             {dayRenders.map(r => (
-              <DayRenderRow key={r.id} render={r} onUploaded={loadData} />
+              <DayRenderRow
+                key={r.id}
+                render={r}
+                productAccountId={productAccountById.get(r.productId) ?? null}
+                onUploaded={loadData}
+                onMoved={loadData}
+              />
             ))}
           </div>
         </div>

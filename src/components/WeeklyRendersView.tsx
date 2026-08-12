@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { db, getVisibleForContainer } from '../services/databaseService';
+import { db, getVisibleForContainer, isGeneralContainer } from '../services/databaseService';
 import type { Render } from '../services/databaseService';
 import {
   ChevronLeft, ChevronRight, RefreshCw,
   Sparkles, Scissors, Layers, Play, Share2,
 } from 'lucide-react';
 import { useContainer } from '../context/ContainerContext';
+import { useT } from '../context/LanguageContext';
+import { MoveToContainerMenu } from './MoveToContainerMenu';
 
 // ── Week helpers ──────────────────────────────────────────────────────────────
 
@@ -71,7 +73,8 @@ const StatusDot: React.FC<{ status: Render['status'] }> = ({ status }) => {
 
 // ── Compact render row ────────────────────────────────────────────────────────
 
-const WeekRenderCard: React.FC<{ render: Render }> = ({ render }) => {
+const WeekRenderCard: React.FC<{ render: Render; productAccountId: string | null; onMoved: () => void }> = ({ render, productAccountId, onMoved }) => {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -104,6 +107,18 @@ const WeekRenderCard: React.FC<{ render: Render }> = ({ render }) => {
         <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', flexShrink: 0 }}>
           {new Date(render.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
         </span>
+        <MoveToContainerMenu
+          currentAccountId={render.accountId}
+          onMove={target => db.moveRenderToContainer(render.id, target)}
+          onMoved={onMoved}
+          itemLabel={t.move_render_item_label}
+          ariaLabel={t.move_container_action_label}
+          getWarning={target => (
+            !isGeneralContainer(productAccountId) && productAccountId !== (target || null)
+              ? t.move_container_product_warning
+              : null
+          )}
+        />
       </div>
 
       {/* Actions for done renders */}
@@ -167,13 +182,18 @@ const WeekRenderCard: React.FC<{ render: Render }> = ({ render }) => {
 export const WeeklyRendersView: React.FC = () => {
   const { activeAccountId } = useContainer();
   const [allRenders, setAllRenders] = useState<Render[]>([]);
+  // Products aren't shown here, only fetched to look up each render's product's own container —
+  // that's what lets MoveToContainerMenu warn when a render is about to move somewhere its
+  // (denormalized) product won't be visible from. See getWarning below.
+  const [productAccountById, setProductAccountById] = useState<Map<string, string | null>>(new Map());
   const [loading, setLoading] = useState(true);
   const [weekStart, setWeekStart] = useState<Date>(() => getWeekStart(new Date()));
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
-    const data = await db.getRenders();
+    const [data, products] = await Promise.all([db.getRenders(), db.getProducts()]);
     setAllRenders(data);
+    setProductAccountById(new Map(products.map(p => [p.id, p.accountId ?? null])));
     if (!silent) setLoading(false);
   }, []);
 
@@ -306,7 +326,14 @@ export const WeeklyRendersView: React.FC = () => {
                 {/* Renders for this day */}
                 {dayRenders.length > 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', paddingLeft: '0.5rem' }}>
-                    {dayRenders.map(r => <WeekRenderCard key={r.id} render={r} />)}
+                    {dayRenders.map(r => (
+                      <WeekRenderCard
+                        key={r.id}
+                        render={r}
+                        productAccountId={productAccountById.get(r.productId) ?? null}
+                        onMoved={() => load(true)}
+                      />
+                    ))}
                   </div>
                 ) : (
                   <div style={{ paddingLeft: '0.5rem' }}>

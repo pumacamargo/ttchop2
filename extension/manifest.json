@@ -1,9 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "TTChop - Importar Producto de TikTok",
+  "name": "TTChop2 - Importar Producto de TikTok",
   "version": "1.0.0",
-  "description": "Agrega un boton en las paginas de producto de TikTok Shop para importarlo directo a TTChop.",
-  "permissions": ["storage"],
+  "description": "Agrega un boton en las paginas de producto de TikTok Shop para importarlo directo a TTChop2.",
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "https://*.tiktok.com/*",
     "https://identitytoolkit.googleapis.com/*",
@@ -16,13 +18,19 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "TTChop"
+    "default_title": "TTChop2"
   },
   "content_scripts": [
     {
-      "matches": ["https://*.tiktok.com/*"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "https://*.tiktok.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
   ]

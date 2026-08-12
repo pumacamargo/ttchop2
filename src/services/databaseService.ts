@@ -3294,6 +3294,37 @@ class DatabaseService {
     await deleteDoc(doc(firestore, 'renders', id));
   }
 
+  /**
+   * Fetches `docId` from `collectionName`, throwing unless it exists and belongs to `userId` —
+   * same ownership check as `requireOwnedProduct`, generalized so `moveRenderToContainer` and
+   * `moveScheduledRenderToContainer` don't each re-implement it.
+   */
+  private async requireOwnedDoc(userId: string, collectionName: string, docId: string, notFoundMessage: string): Promise<{ ref: DocumentReference; currentAccountId: string | null }> {
+    const ref = doc(firestore, collectionName, docId);
+    const snap = await getDoc(ref);
+    if (!snap.exists() || snap.data().userId !== userId) throw new Error(notFoundMessage);
+    return { ref, currentAccountId: (snap.data().accountId as string | undefined) || null };
+  }
+
+  /**
+   * Moves a render to another container (`null` = general/shared). Unlike `moveProductToContainer`,
+   * a render has nothing hanging off it — no sessions, no children — so this is a single document
+   * write, no batch needed. `deleteField()` represents "general" for the same reason it does there:
+   * the moved doc ends up in exactly the shape of one that was always general.
+   *
+   * `productId`/`productName` are denormalized onto the render and are left untouched here on
+   * purpose — the render keeps working after the move either way. If the render's product isn't
+   * visible in the target container the caller's UI should warn about that before confirming (see
+   * `MoveToContainerMenu`'s `getWarning`), but it's informational only and never blocks the move.
+   */
+  async moveRenderToContainer(renderId: string, targetAccountId: string | null): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+    const { ref, currentAccountId } = await this.requireOwnedDoc(user.uid, 'renders', renderId, 'Render not found');
+    if (currentAccountId === (targetAccountId || null)) return; // already there — nothing to do
+    await updateDoc(ref, targetAccountId ? { accountId: targetAccountId } : { accountId: deleteField() });
+  }
+
   async archiveRenderVideo(renderId: string, sourceUrl: string): Promise<string> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
@@ -3515,6 +3546,15 @@ class DatabaseService {
 
   async deleteScheduledRender(id: string): Promise<void> {
     await deleteDoc(doc(firestore, 'scheduled_renders', id));
+  }
+
+  /** Same as `moveRenderToContainer` but for a scheduled calendar job — see that method's comment. */
+  async moveScheduledRenderToContainer(jobId: string, targetAccountId: string | null): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+    const { ref, currentAccountId } = await this.requireOwnedDoc(user.uid, 'scheduled_renders', jobId, 'Scheduled render not found');
+    if (currentAccountId === (targetAccountId || null)) return; // already there — nothing to do
+    await updateDoc(ref, targetAccountId ? { accountId: targetAccountId } : { accountId: deleteField() });
   }
 
   async getUserPref(key: string): Promise<string | null> {

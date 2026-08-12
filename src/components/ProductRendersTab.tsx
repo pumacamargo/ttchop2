@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState, useMemo } from 'react';
-import { db, getVisibleForContainer } from '../services/databaseService';
+import { db, getVisibleForContainer, isGeneralContainer } from '../services/databaseService';
 import type { Product, Render } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
 import { RefreshCw, Sparkles, Scissors, Layers, Play, Share2, ShieldAlert, Film, Link2, Check, Pencil } from 'lucide-react';
+import { MoveToContainerMenu } from './MoveToContainerMenu';
 
 interface ProductRendersTabProps {
   product: Product;
@@ -89,7 +90,7 @@ export const ProductRendersTab: React.FC<ProductRendersTabProps> = ({ product })
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      {renders.map(r => <ProductRenderCard key={r.id} render={r} />)}
+      {renders.map(r => <ProductRenderCard key={r.id} render={r} product={product} onMoved={load} />)}
     </div>
   );
 };
@@ -115,7 +116,7 @@ const STATUS_COLOR: Record<Render['status'], string> = {
   failed: 'var(--danger)',
 };
 
-const ProductRenderCard: React.FC<{ render: Render }> = ({ render }) => {
+const ProductRenderCard: React.FC<{ render: Render; product: Product; onMoved: () => void }> = ({ render, product, onMoved }) => {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -194,6 +195,18 @@ const ProductRenderCard: React.FC<{ render: Render }> = ({ render }) => {
         <span style={{ flex: 1, textAlign: 'right', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
           {new Date(render.createdAt).toLocaleString()}
         </span>
+        <MoveToContainerMenu
+          currentAccountId={render.accountId}
+          onMove={target => db.moveRenderToContainer(render.id, target)}
+          onMoved={onMoved}
+          itemLabel={t.move_render_item_label}
+          ariaLabel={t.move_container_action_label}
+          getWarning={target => (
+            !isGeneralContainer(product.accountId) && product.accountId !== (target || null)
+              ? t.move_container_product_warning
+              : null
+          )}
+        />
       </div>
 
       {/* Actions for done renders */}

@@ -426,6 +426,14 @@ const t = {
     move_container_moving:              'Moving...',
     move_container_success:             'Product moved to {target}.',
     move_container_error:               'Could not move the product. Please try again.',
+    // Move to container — shared by renders and scheduled jobs (MoveToContainerMenu)
+    move_container_action_label:        'Move to another container',
+    move_container_generic_confirm_question: 'Move {item} to {target}?',
+    move_container_generic_success:     'Moved {item} to {target}.',
+    move_container_generic_error:       'Could not move {item}. Please try again.',
+    move_container_product_warning:     "This video will move, but its product stays in its current container — you won't be able to open it from here.",
+    move_render_item_label:             'this render',
+    move_scheduled_item_label:          'this scheduled video',
     // Product Detail — clips tab
     product_clips_empty:      'No clips for this product yet.',
     product_clips_empty_hint: 'Create a session to start uploading clips for this product.',
@@ -873,6 +881,14 @@ const t = {
     move_container_moving:              'Moviendo...',
     move_container_success:             'Producto movido a {target}.',
     move_container_error:               'No se pudo mover el producto. Intenta de nuevo.',
+    // Move to container — shared by renders and scheduled jobs (MoveToContainerMenu)
+    move_container_action_label:        'Mover a otro contenedor',
+    move_container_generic_confirm_question: '¿Mover {item} a {target}?',
+    move_container_generic_success:     'Se movió {item} a {target}.',
+    move_container_generic_error:       'No se pudo mover {item}. Intenta de nuevo.',
+    move_container_product_warning:     'Este video se moverá, pero su producto se queda en su contenedor actual: no podrás abrirlo desde aquí.',
+    move_render_item_label:             'este render',
+    move_scheduled_item_label:          'este video programado',
     // Product Detail — clips tab
     product_clips_empty:      'Este producto todavía no tiene clips.',
     product_clips_empty_hint: 'Crea una sesión para empezar a subir clips de este producto.',
@@ -1320,6 +1336,14 @@ const t = {
     move_container_moving:              '移動中...',
     move_container_success:             '商品を{target}に移動しました。',
     move_container_error:               '商品を移動できませんでした。もう一度お試しください。',
+    // Move to container — shared by renders and scheduled jobs (MoveToContainerMenu)
+    move_container_action_label:        '別のコンテナに移動',
+    move_container_generic_confirm_question: '{item}を{target}に移動しますか？',
+    move_container_generic_success:     '{item}を{target}に移動しました。',
+    move_container_generic_error:       '{item}を移動できませんでした。もう一度お試しください。',
+    move_container_product_warning:     'この動画は移動しますが、その商品は現在のコンテナに残ります。ここからは開けなくなります。',
+    move_render_item_label:             'このレンダー',
+    move_scheduled_item_label:          'この予約動画',
     // Product Detail — clips tab
     product_clips_empty:      'この商品にはまだクリップがありません。',
     product_clips_empty_hint: 'セッションを作成して、この商品のクリップをアップロードしましょう。',

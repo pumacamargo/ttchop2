@@ -313,7 +313,7 @@ function injectButton() {
 
   const btn = document.createElement('button');
   btn.id = 'ttchop-import-btn';
-  btn.textContent = '+ Agregar a TTChop';
+  btn.textContent = '+ Agregar a TTChop2';
   document.body.appendChild(btn);
 
   btn.addEventListener('click', async () => {
@@ -351,7 +351,7 @@ function injectButton() {
         const containerNote = failed
           ? ` Agregado a ${container.shortLabel} (no se pudieron cargar tus cuentas).`
           : ` Agregado a ${container.shortLabel}.`;
-        showToast(`"${product.name.slice(0, 40)}..."${regionSuffix} ${verb} en TTChop.${containerNote}`, 'success');
+        showToast(`"${product.name.slice(0, 40)}..."${regionSuffix} ${verb} en TTChop2.${containerNote}`, 'success');
       } else if (res.error === 'NOT_LOGGED_IN') {
         showToast('Iniciá sesión desde el ícono de la extensión primero.', 'error');
       } else {
@@ -361,7 +361,7 @@ function injectButton() {
       showToast('La extensión se actualizó — refrescá esta página e intentá de nuevo.', 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = '+ Agregar a TTChop';
+      btn.textContent = '+ Agregar a TTChop2';
     }
   });
 }
