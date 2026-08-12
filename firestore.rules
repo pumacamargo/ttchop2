@@ -47,9 +47,15 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Calendar strategy — free-text posting strategy, one doc per user
-    match /calendar_strategy/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    // Calendar strategy — free-text posting strategy. One doc per CONTAINER: the general
+    // container keeps the doc id as `{userId}` (unchanged, so every doc written before
+    // containers existed keeps working with zero migration), and a per-TikTok-account
+    // container appends the account's openId as `{userId}__{accountId}` — see
+    // `containerDocId()` in databaseService.ts. The rule only needs the userId half to
+    // validate ownership, so it splits the id on '__' and checks the first segment: a user
+    // can never read/write another user's doc no matter what accountId suffix they pick.
+    match /calendar_strategy/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == docId.split('__')[0];
     }
 
     // Analytics: imported TikTok Shop order lines — one doc per Order ID + SKU ID,
@@ -66,10 +72,12 @@ service cloud.firestore {
       allow update: if request.auth != null && request.auth.uid == resource.data.userId;
     }
 
-    // Brand Concept — one doc per user with the channel's art direction
-    // (description, niche, style, colors, fonts, moodboard images).
-    match /brand_concepts/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    // Brand Concept — one doc per CONTAINER with the channel's art direction (description,
+    // niche, style, colors, fonts, moodboard images). Same composite-id scheme as
+    // calendar_strategy above: `{userId}` for the general container, `{userId}__{accountId}`
+    // for an account container, validated by splitting on '__' and checking the first segment.
+    match /brand_concepts/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == docId.split('__')[0];
     }
 
     // Reports: LLM-generated performance reports — one doc per report under

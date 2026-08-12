@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, RefreshCw, AlertTriangle, UserRoundPlus, Trash2, Check } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
-import { db } from '../services/databaseService';
+import { useContainer } from '../context/ContainerContext';
 import { getTikTokAccounts, disconnectTikTokAccount, buildTikTokAuthorizeUrl } from '../services/tiktokService';
 import type { TikTokAccount } from '../services/tiktokService';
 
@@ -9,6 +9,7 @@ type LoadState = 'loading' | 'ready' | 'empty' | 'error';
 
 export function TikTokAccountsModal({ onClose }: { onClose: () => void }) {
   const t = useT();
+  const { activeAccountId, switchContainer, refreshAccounts } = useContainer();
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [loadError, setLoadError] = useState('');
   const [accounts, setAccounts] = useState<TikTokAccount[]>([]);
@@ -29,24 +30,25 @@ export function TikTokAccountsModal({ onClose }: { onClose: () => void }) {
     setLoadState('loading');
     setLoadError('');
     try {
-      const [list, pref] = await Promise.all([getTikTokAccounts(), db.getUserPref('activeTiktokAccountId')]);
+      const list = await getTikTokAccounts();
       if (!mountedRef.current) return;
       setAccounts(list);
-      setActiveOpenId(pref);
+      setActiveOpenId(activeAccountId);
       setLoadState(list.length === 0 ? 'empty' : 'ready');
     } catch (err) {
       if (!mountedRef.current) return;
       setLoadError(err instanceof Error ? err.message : t.tiktok_accounts_load_error);
       setLoadState('error');
     }
-  }, [t]);
+  }, [t, activeAccountId]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleSetActive = async (openId: string) => {
     setSettingActiveOpenId(openId);
     try {
-      await db.setUserPref('activeTiktokAccountId', openId);
+      // Una sola noción de cuenta activa: elegirla aquí también cambia el contenedor de datos.
+      await switchContainer(openId);
       if (!mountedRef.current) return;
       setActiveOpenId(openId);
     } finally {
@@ -64,8 +66,9 @@ export function TikTokAccountsModal({ onClose }: { onClose: () => void }) {
       setAccounts(remaining);
       setConfirmingOpenId(null);
       if (remaining.length === 0) setLoadState('empty');
+      refreshAccounts().catch(() => {});
       if (activeOpenId === openId) {
-        await db.setUserPref('activeTiktokAccountId', '');
+        await switchContainer(null);
         if (mountedRef.current) setActiveOpenId(null);
       }
     } catch (err) {

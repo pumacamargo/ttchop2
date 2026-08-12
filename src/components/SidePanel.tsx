@@ -16,6 +16,7 @@ import {
 import { useT } from '../context/LanguageContext';
 import type { ActiveTab } from '../types/navigation';
 import { TikTokAccountsModal } from './TikTokAccountsModal';
+import { ContainerSwitcher } from './ContainerSwitcher';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -99,6 +100,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, activeTab
           </div>
           <h1 className="side-panel-wordmark">TTChop</h1>
         </div>
+
+        <ContainerSwitcher />
 
         <div className="side-panel-items">
           {menuItems.map(item => (

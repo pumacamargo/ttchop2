@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Upload, RefreshCw, CheckCircle2, AlertTriangle, Plug } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
-import { db } from '../services/databaseService';
+import { useContainer } from '../context/ContainerContext';
 import type { Render } from '../services/databaseService';
 import { getTikTokAccounts, uploadRenderToTikTok, buildTikTokAuthorizeUrl } from '../services/tiktokService';
 import type { TikTokAccount } from '../services/tiktokService';
@@ -11,6 +11,7 @@ type UploadState = 'idle' | 'uploading' | 'success' | 'error';
 
 export function TikTokUploadModal({ render, onClose, onUploaded }: { render: Render; onClose: () => void; onUploaded?: () => void }) {
   const t = useT();
+  const { activeAccountId } = useContainer();
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [loadError, setLoadError] = useState('');
   const [accounts, setAccounts] = useState<TikTokAccount[]>([]);
@@ -29,21 +30,25 @@ export function TikTokUploadModal({ render, onClose, onUploaded }: { render: Ren
     setLoadState('loading');
     setLoadError('');
     try {
-      const [list, preferred] = await Promise.all([getTikTokAccounts(), db.getUserPref('activeTiktokAccountId')]);
+      const list = await getTikTokAccounts();
       if (!mountedRef.current) return;
       setAccounts(list);
       if (list.length === 0) {
         setLoadState('empty');
       } else {
         setLoadState('ready');
-        setSelectedOpenId(preferred && list.some(a => a.openId === preferred) ? preferred : list[0].openId);
+        // Preselecciona la cuenta del contenedor activo: si estás trabajando dentro de una cuenta,
+        // lo natural es que el video vaya a esa misma. Sigue siendo cambiable antes de subir.
+        setSelectedOpenId(
+          activeAccountId && list.some(a => a.openId === activeAccountId) ? activeAccountId : list[0].openId
+        );
       }
     } catch (err) {
       if (!mountedRef.current) return;
       setLoadError(err instanceof Error ? err.message : t.tiktok_accounts_load_error);
       setLoadState('error');
     }
-  }, [t]);
+  }, [t, activeAccountId]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
 

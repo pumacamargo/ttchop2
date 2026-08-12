@@ -18,6 +18,7 @@ import { AuthView } from './components/AuthView';
 import { TikTokCallbackView } from './components/TikTokCallbackView';
 import { useAuth } from './context/AuthContext';
 import { LanguageProvider, useT } from './context/LanguageContext';
+import { ContainerProvider } from './context/ContainerContext';
 import { db } from './services/databaseService';
 import type { MasterVideo } from './services/databaseService';
 import type { ActiveTab } from './types/navigation';
@@ -224,7 +225,14 @@ function App() {
     <LanguageProvider language={appLanguage}>
       {showTikTokCallback
         ? <TikTokCallbackView onDone={() => setShowTikTokCallback(false)} />
-        : <AppInner appLanguage={appLanguage} setAppLanguage={setAppLanguage} />}
+        : (
+          // Needs a signed-in user (from the AuthProvider mounted in main.tsx, above App) to
+          // load accounts/prefs, and must wrap every view so they can all read the active
+          // container once they start scoping data by it.
+          <ContainerProvider>
+            <AppInner appLanguage={appLanguage} setAppLanguage={setAppLanguage} />
+          </ContainerProvider>
+        )}
     </LanguageProvider>
   );
 }

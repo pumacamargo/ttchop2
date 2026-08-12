@@ -16,6 +16,9 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
 import type { ParsedAnalyticsOrder } from './analyticsImport';
+// Pure, framework-free filtering logic lives in utils so every view can unit test it without
+// pulling in Firebase — re-exported here so callers of this service don't need a second import.
+export { getVisibleForContainer, isGeneralContainer } from '../utils/containerVisibility';
 
 export type VideoSource = 'recorded' | 'ai_generated';
 
@@ -35,6 +38,9 @@ export interface ProductVideo {
 export interface Product {
   id: string;
   userId: string;
+  // Container this product lives in: absent/undefined = general (shared, visible from every
+  // account); a TikTok account's openId = private to that account. See containerVisibility.ts.
+  accountId?: string;
   name: string;
   description: string;
   modelSheetUrls: string[];
@@ -70,6 +76,8 @@ export interface SessionVideo {
 export interface Session {
   id: string;
   userId: string;
+  // Container this session lives in — see Product.accountId.
+  accountId?: string;
   name: string;
   productIds: string[]; // links to zero or more products; deleting a product only unlinks, never deletes the session
   videos: SessionVideo[];
@@ -96,6 +104,8 @@ export type RenderStatus = 'pending' | 'processing' | 'done' | 'failed';
 export interface Render {
   id: string;
   userId: string;
+  // Container this render lives in — see Product.accountId.
+  accountId?: string;
   type: RenderType;
   status: RenderStatus;
   productId: string;
@@ -136,6 +146,8 @@ export type ScheduledRenderType = 'collage' | 'overlay' | 'collage+overlay' | 'a
 export interface ScheduledRender {
   id: string;
   userId: string;
+  // Container this scheduled job lives in — see Product.accountId.
+  accountId?: string;
   type: ScheduledRenderType;
   scheduledAt: string;  // ISO UTC
   localDate: string;    // YYYY-MM-DD in user's timezone
@@ -158,10 +170,13 @@ export interface ScheduledRender {
 }
 
 // ── Calendar Strategy (Phase 4) ────────────────────────────────────────────
-// One doc per user at calendar_strategy/{userId}: free-text posting strategy
-// the user writes, later fed to the /calendar/populate endpoint as context.
+// One doc per CONTAINER at calendar_strategy/{docId} — see `containerDocId()` below for how
+// `docId` is derived from userId + accountId, and why. `accountId` is also kept as a field on
+// the doc itself (redundant with the id, but consistent with every other scoped collection and
+// handy for debugging/queries) — absent/undefined = general, see Product.accountId.
 export interface CalendarStrategy {
   strategy: string;
+  accountId?: string;
   updatedAt: string; // ISO
 }
 
@@ -214,13 +229,15 @@ export interface MasterVideo {
 export interface AnalyticsOrder extends ParsedAnalyticsOrder {
   id: string; // same as compositeKey — `${orderId}_${skuId}`
   userId: string;
+  // Container this order line was imported into — see Product.accountId.
+  accountId?: string;
   importedAt: string;
 }
 
 // ── Brand Concept (Phase 3) ─────────────────────────────────────────────────
-// One doc per user at brand_concepts/{userId}: the channel's art direction —
-// what it's about, its niche/style, brand colors, fonts, and a moodboard of
-// reference images. Read/written directly by BrandConceptView.
+// One doc per CONTAINER at brand_concepts/{docId} — same `containerDocId()` scheme as
+// calendar_strategy above: the channel's art direction (what it's about, niche/style, brand
+// colors, fonts, moodboard images) can differ per TikTok account. Read/written by BrandConceptView.
 export interface BrandFont {
   name: string;
   url?: string;
@@ -234,6 +251,8 @@ export interface BrandConcept {
   colors: string[];
   fonts: BrandFont[];
   imageUrls: string[];
+  // Container this brand concept lives in — absent/undefined = general, see Product.accountId.
+  accountId?: string;
   updatedAt: string; // ISO
 }
 
@@ -280,6 +299,8 @@ export interface ReportHistoryEntry {
   id: string;
   generatedAt: string;
   report: string;
+  // Container this report was generated for — see Product.accountId.
+  accountId?: string;
 }
 
 export interface VideoVariation {
@@ -2246,11 +2267,20 @@ function normalizeProduct(raw: any): Product {
     raw.region && raw.sourceId ? `https://shop.tiktok.com/${raw.region}/pdp/${raw.sourceId}` : undefined
   );
 
+  // Contenedores (accountId): todo producto existente antes de este campo no lo tiene, y eso
+  // debe seguir significando "general" para siempre — por eso no hay migración. Aquí solo se
+  // normaliza el tri-estado ausente/null/'' a `undefined` de forma consistente, para que el
+  // resto del código pueda hacer un solo chequeo falsy en vez de acordarse de los tres casos.
+  const accountId: string | undefined = raw.accountId || undefined;
+
   return {
     ...raw,
     videos,
     ...(scrapedAt !== undefined && { scrapedAt }),
     ...(sourceUrl !== undefined && { sourceUrl }),
+    // Unconditional (not spread-guarded like the two backfills above): this must override
+    // whatever `...raw` contributed — including an explicit `null` or `''` — not just fill a gap.
+    accountId,
   } as Product;
 }
 
@@ -2278,6 +2308,31 @@ function normalizeTemplate(raw: any): Template {
 function stripUndefined<T extends object>(data: T): Partial<T> {
   return Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
+
+/**
+ * calendar_strategy and brand_concepts are one-doc-per-user today, with the doc id equal to the
+ * userId (see firestore.rules). Scoping them per container means one doc per CONTAINER instead
+ * of one per user, but the id still has to let Firestore rules validate ownership without an
+ * extra read/lookup. So the general container keeps the doc id exactly as `{userId}` — unchanged,
+ * every existing doc keeps resolving with zero migration — and an account container appends the
+ * accountId: `{userId}__{accountId}`. The rule just splits the id on '__' and compares the first
+ * segment to request.auth.uid (see firestore.rules). Firebase UIDs and TikTok openIds are both
+ * plain alphanumeric strings, so neither can contain '__' and confuse that split.
+ */
+function containerDocId(userId: string, accountId?: string): string {
+  return accountId ? `${userId}__${accountId}` : userId;
+}
+
+/**
+ * Why the accountId half of container filtering happens in JS (via `getVisibleForContainer`,
+ * re-exported above) instead of in the Firestore query itself: the query already filters by
+ * `where('userId', '==', uid)`, and OR-ing in `accountId in [activeAccountId, null]` would need a
+ * composite index per collection AND doesn't actually work for the "absent field" case anyway —
+ * `in` can't match "field does not exist". Volumes here are a few hundred documents per user at
+ * most, so fetching the user's docs once and filtering in memory is far simpler than maintaining
+ * indexes and a sentinel value for "general" just to push that filter server-side. Revisit if a
+ * single user's collections ever grow into the thousands.
+ */
 
 /**
  * Proyecto de Firebase al que ttchop-server debe escribir el resultado del render.
@@ -2388,7 +2443,9 @@ class DatabaseService {
     return snap.docs.map(doc => normalizeProduct(doc.data()));
   }
 
-  async saveProduct(product: Omit<Product, 'id' | 'userId' | 'createdAt'>): Promise<Product> {
+  // `accountId` defaults to undefined (the general container) so every existing caller — none of
+  // which know about containers yet — keeps creating general products exactly as before.
+  async saveProduct(product: Omit<Product, 'id' | 'userId' | 'createdAt' | 'accountId'>, accountId?: string): Promise<Product> {
     const user = auth.currentUser;
     if (!user) throw new Error("User not authenticated");
 
@@ -2397,6 +2454,7 @@ class DatabaseService {
     const newProduct: Product = {
       id: prodId,
       userId: user.uid,
+      ...(accountId && { accountId }),
       name: product.name,
       description: product.description,
       modelSheetUrls: product.modelSheetUrls,
@@ -2462,7 +2520,8 @@ class DatabaseService {
     return snap.docs.map(d => d.data() as Session);
   }
 
-  async saveSession(name: string, productIds: string[]): Promise<Session> {
+  // `accountId` defaults to undefined (general container) — see saveProduct.
+  async saveSession(name: string, productIds: string[], accountId?: string): Promise<Session> {
     const user = auth.currentUser;
     if (!user) throw new Error("User not authenticated");
 
@@ -2470,6 +2529,7 @@ class DatabaseService {
     const newSession: Session = {
       id: sessionId,
       userId: user.uid,
+      ...(accountId && { accountId }),
       name,
       productIds,
       videos: [],
@@ -3092,12 +3152,14 @@ class DatabaseService {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
-  async createRender(data: Omit<Render, 'id' | 'userId' | 'createdAt' | 'updatedAt'>, customId?: string): Promise<string> {
+  // `accountId` defaults to undefined (general container) — see saveProduct. Appended after
+  // `customId` (rather than replacing it) so every existing positional call keeps working.
+  async createRender(data: Omit<Render, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'accountId'>, customId?: string, accountId?: string): Promise<string> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     const id = customId ?? `render_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = new Date().toISOString();
-    await setDoc(doc(firestore, 'renders', id), { ...stripUndefined(data), id, userId: user.uid, createdAt: now, updatedAt: now });
+    await setDoc(doc(firestore, 'renders', id), { ...stripUndefined({ ...data, accountId }), id, userId: user.uid, createdAt: now, updatedAt: now });
     return id;
   }
 
@@ -3321,11 +3383,12 @@ class DatabaseService {
       .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt));
   }
 
-  async createScheduledRender(data: Omit<ScheduledRender, 'id' | 'userId' | 'createdAt'>): Promise<string> {
+  // `accountId` defaults to undefined (general container) — see saveProduct.
+  async createScheduledRender(data: Omit<ScheduledRender, 'id' | 'userId' | 'createdAt' | 'accountId'>, accountId?: string): Promise<string> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     const docRef = await addDoc(collection(firestore, 'scheduled_renders'), {
-      ...stripUndefined(data),
+      ...stripUndefined({ ...data, accountId }),
       userId: user.uid,
       createdAt: new Date().toISOString(),
     });
@@ -3355,18 +3418,24 @@ class DatabaseService {
 
   // ── Calendar Strategy ────────────────────────────────────────────────────
 
-  async getCalendarStrategy(): Promise<CalendarStrategy | null> {
+  // `accountId` defaults to undefined, resolving to the general container's doc — see
+  // containerDocId() and saveProduct.
+  async getCalendarStrategy(accountId?: string): Promise<CalendarStrategy | null> {
     const user = auth.currentUser;
     if (!user) return null;
-    const snap = await getDoc(doc(firestore, 'calendar_strategy', user.uid));
+    const snap = await getDoc(doc(firestore, 'calendar_strategy', containerDocId(user.uid, accountId)));
     return snap.exists() ? (snap.data() as CalendarStrategy) : null;
   }
 
-  async saveCalendarStrategy(strategyText: string): Promise<void> {
+  async saveCalendarStrategy(strategyText: string, accountId?: string): Promise<void> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
-    const payload: CalendarStrategy = { strategy: strategyText, updatedAt: new Date().toISOString() };
-    await setDoc(doc(firestore, 'calendar_strategy', user.uid), payload);
+    const payload: CalendarStrategy = {
+      strategy: strategyText,
+      ...(accountId && { accountId }),
+      updatedAt: new Date().toISOString(),
+    };
+    await setDoc(doc(firestore, 'calendar_strategy', containerDocId(user.uid, accountId)), payload);
   }
 
   // ── Calendar Populate: LLM-proposed plan (server endpoint not implemented yet) ──
@@ -3400,7 +3469,8 @@ class DatabaseService {
     return snap.docs.map(d => ({ id: d.id, ...d.data() } as AnalyticsOrder));
   }
 
-  async importAnalyticsOrders(orders: ParsedAnalyticsOrder[]): Promise<{ newCount: number; updatedCount: number }> {
+  // `accountId` defaults to undefined (general container) — see saveProduct.
+  async importAnalyticsOrders(orders: ParsedAnalyticsOrder[], accountId?: string): Promise<{ newCount: number; updatedCount: number }> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
 
@@ -3415,7 +3485,7 @@ class DatabaseService {
       const batch = writeBatch(firestore);
       chunk.forEach(order => {
         const ref = doc(firestore, 'analytics_orders', user.uid, 'orders', order.compositeKey);
-        batch.set(ref, { ...order, id: order.compositeKey, userId: user.uid, importedAt: now });
+        batch.set(ref, { ...order, id: order.compositeKey, userId: user.uid, ...(accountId && { accountId }), importedAt: now });
         if (existingKeys.has(order.compositeKey)) updatedCount++; else newCount++;
       });
       await batch.commit();
@@ -3426,32 +3496,43 @@ class DatabaseService {
 
   // ── Brand Concept ─────────────────────────────────────────────────────────
 
-  async getBrandConcept(): Promise<BrandConcept | null> {
+  // `accountId` defaults to undefined, resolving to the general container's doc — see
+  // containerDocId() and saveProduct. All five brand_concepts methods below take it for the same
+  // reason: they all read/write the one doc for a given container.
+  async getBrandConcept(accountId?: string): Promise<BrandConcept | null> {
     const user = auth.currentUser;
     if (!user) return null;
-    const snap = await getDoc(doc(firestore, 'brand_concepts', user.uid));
+    const snap = await getDoc(doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)));
     return snap.exists() ? (snap.data() as BrandConcept) : null;
   }
 
-  async saveBrandConcept(data: { description: string; niche: string; style: string; colors: string[] }): Promise<void> {
+  async saveBrandConcept(data: { description: string; niche: string; style: string; colors: string[] }, accountId?: string): Promise<void> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     // merge: true so this text/color save never clobbers fonts/imageUrls managed by the upload methods below
-    await setDoc(doc(firestore, 'brand_concepts', user.uid), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
+    await setDoc(
+      doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)),
+      { ...data, ...(accountId && { accountId }), updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
   }
 
-  async uploadBrandImage(file: File): Promise<string> {
+  async uploadBrandImage(file: File, accountId?: string): Promise<string> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     const path = `users/${user.uid}/brand/images/${Date.now()}_${file.name}`;
     const fileRef = ref(storage, path);
     await uploadBytes(fileRef, file);
     const url = await getDownloadURL(fileRef);
-    await setDoc(doc(firestore, 'brand_concepts', user.uid), { imageUrls: arrayUnion(url), updatedAt: new Date().toISOString() }, { merge: true });
+    await setDoc(
+      doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)),
+      { imageUrls: arrayUnion(url), ...(accountId && { accountId }), updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
     return url;
   }
 
-  async deleteBrandImage(url: string): Promise<void> {
+  async deleteBrandImage(url: string, accountId?: string): Promise<void> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     try {
@@ -3460,10 +3541,10 @@ class DatabaseService {
     } catch (err) {
       console.error(err); // object may already be gone from Storage; still detach it from Firestore below
     }
-    await updateDoc(doc(firestore, 'brand_concepts', user.uid), { imageUrls: arrayRemove(url), updatedAt: new Date().toISOString() });
+    await updateDoc(doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)), { imageUrls: arrayRemove(url), updatedAt: new Date().toISOString() });
   }
 
-  async uploadBrandFont(file: File): Promise<BrandFont> {
+  async uploadBrandFont(file: File, accountId?: string): Promise<BrandFont> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     const path = `users/${user.uid}/brand/fonts/${Date.now()}_${file.name}`;
@@ -3471,11 +3552,15 @@ class DatabaseService {
     await uploadBytes(fileRef, file);
     const url = await getDownloadURL(fileRef);
     const font: BrandFont = { name: file.name, url, storagePath: path };
-    await setDoc(doc(firestore, 'brand_concepts', user.uid), { fonts: arrayUnion(font), updatedAt: new Date().toISOString() }, { merge: true });
+    await setDoc(
+      doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)),
+      { fonts: arrayUnion(font), ...(accountId && { accountId }), updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
     return font;
   }
 
-  async deleteBrandFont(font: BrandFont): Promise<void> {
+  async deleteBrandFont(font: BrandFont, accountId?: string): Promise<void> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     if (font.storagePath) {
@@ -3485,7 +3570,7 @@ class DatabaseService {
         console.error(err);
       }
     }
-    await updateDoc(doc(firestore, 'brand_concepts', user.uid), { fonts: arrayRemove(font), updatedAt: new Date().toISOString() });
+    await updateDoc(doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)), { fonts: arrayRemove(font), updatedAt: new Date().toISOString() });
   }
 
   // ── Reports ────────────────────────────────────────────────────────────────
@@ -3520,13 +3605,14 @@ class DatabaseService {
       .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
   }
 
-  async saveReportToHistory(report: string): Promise<ReportHistoryEntry> {
+  // `accountId` defaults to undefined (general container) — see saveProduct.
+  async saveReportToHistory(report: string, accountId?: string): Promise<ReportHistoryEntry> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     const id = `report_${Date.now()}`;
     const generatedAt = new Date().toISOString();
-    await setDoc(doc(firestore, 'reports', user.uid, 'history', id), { generatedAt, report });
-    return { id, generatedAt, report };
+    await setDoc(doc(firestore, 'reports', user.uid, 'history', id), { generatedAt, report, ...(accountId && { accountId }) });
+    return { id, generatedAt, report, ...(accountId && { accountId }) };
   }
 
   async deleteReportFromHistory(id: string): Promise<void> {
