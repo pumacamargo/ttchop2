@@ -41,37 +41,16 @@ function mapImportError(err: AnalyticsImportError, t: Translations): string {
 function formatPostedDate(iso: string): string {
   return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(iso));
 }
-
-// ── Daily performance chart (main Analytics chart) ──────────────────────────
-// Two stacked panels sharing one X axis instead of one chart with two y-scales (per dataviz
-// guidance: never dual-axis — two measures of different scale become two charts/small
-// multiples). The money panel plots GMV and settled revenue on ONE shared scale (same unit,
-// so one axis is honest); the video-count panel below it gets its own scale for a different
-// unit, so a handful of videos is never visually crushed by a GMV in the thousands. One shared
-// hover state drives a synced crosshair across both panels and a single tooltip listing every
-// series at that date (per dataviz guidance: "one tooltip, every series").
-
-const DAILY_MONEY_VB_W = 100;
-const DAILY_MONEY_VB_H = 170;
-const DAILY_MONEY_PAD_TOP = 14;
-const DAILY_MONEY_PAD_BOTTOM = 8;
-const DAILY_MONEY_CHART_PX = 110;
-
-const DAILY_VIDEO_VB_W = 100;
-const DAILY_VIDEO_VB_H = 70;
-const DAILY_VIDEO_PAD_TOP = 8;
-const DAILY_VIDEO_PAD_BOTTOM = 8;
-const DAILY_VIDEO_CHART_PX = 56;
-
+// ── Gráfica diaria principal de Analytics ───────────────────────────────────
+// Dos series diarias — unidades vendidas y videos publicados. Ambas son CONTEOS, así que
+// comparten una sola escala y caben en una gráfica: no hay problema de doble eje aquí.
 const DailyPerformanceChart: React.FC<{
   buckets: DailyPerformanceBucket[];
   granularity: BucketGranularity;
-  currency: string;
   emptyText: string;
-  gmvLabel: string;
-  revenueLabel: string;
+  unitsLabel: string;
   videosLabel: string;
-}> = ({ buckets, granularity, currency, emptyText, gmvLabel, revenueLabel, videosLabel }) => {
+}> = ({ buckets, granularity, emptyText, unitsLabel, videosLabel }) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -79,128 +58,85 @@ const DailyPerformanceChart: React.FC<{
     return <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0 }}>{emptyText}</p>;
   }
 
+  const H = 150;
+  const VB_W = 100;
+  const VB_H = 400;
+  const PAD_TOP = 20;
+  const PAD_BOTTOM = 20;
   const n = buckets.length;
-  const maxMoney = Math.max(...buckets.map(b => b.gmv), ...buckets.map(b => b.revenue), 0);
-  const maxVideos = Math.max(...buckets.map(b => b.videoCount), 0);
+  const usableH = VB_H - PAD_TOP - PAD_BOTTOM;
+  const maxVal = Math.max(1, ...buckets.map(b => Math.max(b.unitsSold, b.videoCount)));
 
-  const moneyUsableH = DAILY_MONEY_VB_H - DAILY_MONEY_PAD_TOP - DAILY_MONEY_PAD_BOTTOM;
-  const moneyBaselineY = DAILY_MONEY_VB_H - DAILY_MONEY_PAD_BOTTOM;
-  const xPct = (i: number) => (n === 1 ? 50 : (i / (n - 1)) * DAILY_MONEY_VB_W);
-  const yForMoney = (v: number) => (maxMoney > 0 ? DAILY_MONEY_PAD_TOP + moneyUsableH - (v / maxMoney) * moneyUsableH : moneyBaselineY);
+  const pointsFor = (pick: (b: DailyPerformanceBucket) => number) =>
+    buckets.map((b, i) => ({
+      x: n === 1 ? VB_W / 2 : (i / (n - 1)) * VB_W,
+      y: PAD_TOP + usableH - (pick(b) / maxVal) * usableH,
+    }));
 
-  const gmvPoints = buckets.map((b, i) => ({ x: xPct(i), y: yForMoney(b.gmv) }));
-  const revenuePoints = buckets.map((b, i) => ({ x: xPct(i), y: yForMoney(b.revenue) }));
-  const pathFor = (pts: { x: number; y: number }[]) => pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+  const pathOf = (pts: { x: number; y: number }[]) =>
+    pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
 
-  const videoUsableH = DAILY_VIDEO_VB_H - DAILY_VIDEO_PAD_TOP - DAILY_VIDEO_PAD_BOTTOM;
-  const videoBaselineY = DAILY_VIDEO_VB_H - DAILY_VIDEO_PAD_BOTTOM;
-  const bandW = DAILY_VIDEO_VB_W / n;
-  const barW = Math.max(Math.min(bandW * 0.6, 4), 0.8);
-  const bars = buckets.map((b, i) => ({
-    ...b,
-    h: maxVideos > 0 ? (b.videoCount / maxVideos) * videoUsableH : 0,
-    x: bandW * i + (bandW - barW) / 2,
-  }));
+  const unitPts = pointsFor(b => b.unitsSold);
+  const videoPts = pointsFor(b => b.videoCount);
+  const baselineY = VB_H - PAD_BOTTOM;
 
-  const updateHoverFromClientX = (clientX: number) => {
+  const updateHover = (clientX: number) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect || rect.width === 0) return;
     const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     setHoverIndex(Math.round(frac * (n - 1)));
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowLeft') { e.preventDefault(); setHoverIndex(i => Math.max(0, (i ?? 0) - 1)); }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); setHoverIndex(i => Math.min(n - 1, (i ?? -1) + 1)); }
-    else if (e.key === 'Escape') setHoverIndex(null);
-  };
-
   const hovered = hoverIndex !== null ? buckets[hoverIndex] : null;
-  const hoveredXPct = hoverIndex !== null ? xPct(hoverIndex) : null;
-  const last = buckets[n - 1];
+  const hoverX = hoverIndex !== null ? unitPts[hoverIndex].x : 0;
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.3rem' }}>
-        <LegendDot color="var(--primary)" label={gmvLabel} />
-        <LegendDot color="var(--secondary)" label={revenueLabel} />
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+        <LegendDot color="var(--secondary)" label={unitsLabel} />
+        <LegendDot color="var(--accent)" label={videosLabel} />
       </div>
+
       <div
         ref={containerRef}
         role="img"
-        aria-label={`${formatBucketLabel(last.date, granularity)}: ${gmvLabel} ${formatCurrency(last.gmv, currency)}, ${revenueLabel} ${formatCurrency(last.revenue, currency)}, ${videosLabel} ${last.videoCount}`}
+        aria-label={`${unitsLabel} / ${videosLabel}`}
         tabIndex={0}
-        onPointerMove={e => updateHoverFromClientX(e.clientX)}
-        onPointerDown={e => updateHoverFromClientX(e.clientX)}
+        onPointerMove={e => updateHover(e.clientX)}
+        onPointerDown={e => updateHover(e.clientX)}
         onPointerLeave={() => setHoverIndex(null)}
-        onKeyDown={handleKeyDown}
+        onKeyDown={e => {
+          if (e.key === 'ArrowLeft') { e.preventDefault(); setHoverIndex(i => Math.max(0, (i ?? 0) - 1)); }
+          else if (e.key === 'ArrowRight') { e.preventDefault(); setHoverIndex(i => Math.min(n - 1, (i ?? -1) + 1)); }
+          else if (e.key === 'Escape') setHoverIndex(null);
+        }}
         style={{ position: 'relative', touchAction: 'pan-y', outline: 'none' }}
       >
-        <svg viewBox={`0 0 ${DAILY_MONEY_VB_W} ${DAILY_MONEY_VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: DAILY_MONEY_CHART_PX, display: 'block' }} aria-hidden="true">
-          <line x1={0} y1={moneyBaselineY} x2={DAILY_MONEY_VB_W} y2={moneyBaselineY} stroke="var(--border)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-          <path d={pathFor(gmvPoints)} fill="none" stroke="var(--primary)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-          <path d={pathFor(revenuePoints)} fill="none" stroke="var(--secondary)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-          {hoveredXPct !== null && (
-            <line x1={hoveredXPct} y1={DAILY_MONEY_PAD_TOP} x2={hoveredXPct} y2={moneyBaselineY} stroke="var(--border)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        <svg viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: H, display: 'block' }} aria-hidden="true">
+          <line x1={0} y1={baselineY} x2={VB_W} y2={baselineY} stroke="var(--border)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          {hoverIndex !== null && (
+            <line x1={hoverX} y1={PAD_TOP} x2={hoverX} y2={baselineY} stroke="var(--text-muted)" strokeWidth={1} vectorEffect="non-scaling-stroke" opacity={0.5} />
           )}
+          <path d={pathOf(unitPts)} fill="none" stroke="var(--secondary)" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+          <path d={pathOf(videoPts)} fill="none" stroke="var(--accent)" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
         </svg>
 
-        <div style={{ margin: '0.35rem 0 0.15rem' }}>
-          <LegendDot color="var(--accent)" label={videosLabel} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+          <span>{formatBucketLabel(buckets[0].date, granularity)}</span>
+          <span>{formatBucketLabel(buckets[n - 1].date, granularity)}</span>
         </div>
-        <svg viewBox={`0 0 ${DAILY_VIDEO_VB_W} ${DAILY_VIDEO_VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: DAILY_VIDEO_CHART_PX, display: 'block' }} aria-hidden="true">
-          <line x1={0} y1={videoBaselineY} x2={DAILY_VIDEO_VB_W} y2={videoBaselineY} stroke="var(--border)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-          {bars.map((b, i) => b.h > 0 && (
-            <rect
-              key={b.key}
-              x={b.x}
-              y={videoBaselineY - b.h}
-              width={barW}
-              height={b.h}
-              rx={Math.min(barW / 2, 1)}
-              fill="var(--accent)"
-              opacity={hoverIndex === null || hoverIndex === i ? 1 : 0.5}
-            />
-          ))}
-          {hoveredXPct !== null && (
-            <line x1={hoveredXPct} y1={DAILY_VIDEO_PAD_TOP} x2={hoveredXPct} y2={videoBaselineY} stroke="var(--border)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-          )}
-        </svg>
 
-        {hovered && hoveredXPct !== null && (
-          <div
-            role="status"
-            aria-live="polite"
-            style={{
-              position: 'absolute', left: `${Math.min(88, Math.max(12, hoveredXPct))}%`, top: 0,
-              transform: 'translate(-50%, 0)', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
-              padding: '0.3rem 0.55rem', display: 'flex', flexDirection: 'column', gap: 2, boxShadow: 'var(--shadow-lg)',
-              whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 1,
-            }}
-          >
-            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{formatBucketLabel(hovered.date, granularity)}</span>
-            <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 8, height: 2, background: 'var(--primary)', display: 'inline-block', flexShrink: 0 }} /> {gmvLabel}: {formatCurrency(hovered.gmv, currency)}
-            </span>
-            <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 8, height: 2, background: 'var(--secondary)', display: 'inline-block', flexShrink: 0 }} /> {revenueLabel}: {formatCurrency(hovered.revenue, currency)}
-            </span>
-            <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 8, height: 2, background: 'var(--accent)', display: 'inline-block', flexShrink: 0 }} /> {videosLabel}: {hovered.videoCount.toLocaleString()}
-            </span>
+        {hovered && (
+          <div style={{
+            marginTop: '0.4rem', padding: '0.4rem 0.6rem', borderRadius: 8,
+            background: 'var(--bg-card-hover)', border: '1px solid var(--border)',
+            fontSize: '0.72rem', color: 'var(--text-secondary)',
+          }}>
+            <strong style={{ color: 'var(--text-primary)' }}>{formatBucketLabel(hovered.date, granularity)}</strong>
+            {' · '}<span style={{ color: 'var(--secondary)' }}>{unitsLabel}: {hovered.unitsSold}</span>
+            {' · '}<span style={{ color: 'var(--accent)' }}>{videosLabel}: {hovered.videoCount}</span>
           </div>
         )}
-      </div>
-
-      {/* Selective x-axis labels: first / middle / last — shared by both panels above */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.3rem' }}>
-        <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{formatBucketLabel(buckets[0].date, granularity)}</span>
-        {n > 2 && (
-          <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
-            {formatBucketLabel(buckets[Math.floor((n - 1) / 2)].date, granularity)}
-          </span>
-        )}
-        {n > 1 && <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{formatBucketLabel(buckets[n - 1].date, granularity)}</span>}
       </div>
     </div>
   );
@@ -756,10 +692,8 @@ export const AnalyticsView: React.FC = () => {
                 <DailyPerformanceChart
                   buckets={dailyPerfBuckets}
                   granularity={dailyPerfGranularity}
-                  currency={selectedCurrency}
                   emptyText={t.analytics_daily_chart_empty}
-                  gmvLabel={t.analytics_metric_gmv}
-                  revenueLabel={t.analytics_metric_revenue}
+                  unitsLabel={t.analytics_metric_units}
                   videosLabel={t.analytics_video_metric_published}
                 />
               </SectionCard>

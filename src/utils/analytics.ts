@@ -574,9 +574,8 @@ export function buildPostingBuckets(stats: TikTokVideoStats[], period: Period, n
 export interface DailyPerformanceBucket {
   key: string;
   date: Date; // UTC start of the bucket
-  revenue: number; // settled revenue, matching the Comisión KPI
-  gmv: number; // matching the GMV KPI
-  videoCount: number; // videos posted, by postedAt
+  unitsSold: number; // unidades vendidas ese día
+  videoCount: number; // videos publicados ese día, por postedAt
 }
 
 /**
@@ -597,7 +596,7 @@ export function buildDailyPerformanceBuckets(
   const orderDates = orders.map(o => o.orderDate).filter((d): d is string => d !== null).map(d => new Date(d));
   const postedDates = videoStats.map(s => new Date(s.postedAt));
   const { granularity, buckets: skeleton } = buildBucketSkeleton(period, now, [...orderDates, ...postedDates]);
-  const buckets: DailyPerformanceBucket[] = skeleton.map(b => ({ ...b, revenue: 0, gmv: 0, videoCount: 0 }));
+  const buckets: DailyPerformanceBucket[] = skeleton.map(b => ({ ...b, unitsSold: 0, videoCount: 0 }));
 
   const indexByKey = new Map(buckets.map((b, i) => [b.key, i]));
   const keyOf = (d: Date) => (granularity === 'day' ? dayKey(d) : monthKey(d));
@@ -606,8 +605,7 @@ export function buildDailyPerformanceBuckets(
     if (o.orderDate === null) return;
     const idx = indexByKey.get(keyOf(new Date(o.orderDate)));
     if (idx === undefined) return;
-    buckets[idx].gmv += o.gmv;
-    if (o.settlementStatus === 'Settled') buckets[idx].revenue += o.totalFinalEarnedAmount;
+    buckets[idx].unitsSold += o.itemsSold;
   });
   videoStats.forEach(s => {
     const idx = indexByKey.get(keyOf(new Date(s.postedAt)));
