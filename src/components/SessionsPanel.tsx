@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { isGeneralContainer } from '../services/databaseService';
 import type { Product, Session } from '../services/databaseService';
-import { Video, Plus, ShieldAlert, RefreshCw, Clapperboard } from 'lucide-react';
+import { Video, Plus, ShieldAlert, RefreshCw, Clapperboard, Globe } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 
 const THUMB = 44;
 const OFFSET = 28; // visible width per extra thumb
@@ -82,6 +84,7 @@ export const SessionsPanel: React.FC<SessionsPanelProps> = ({
   sessions, products, loading, errorMsg, onRetry, groupByRegion, emptyTitle, emptyHint, createLabel, onCreate, onSelect,
 }) => {
   const t = useT();
+  const { activeAccountId } = useContainer();
   const [showAddForm, setShowAddForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
@@ -125,6 +128,19 @@ export const SessionsPanel: React.FC<SessionsPanelProps> = ({
           <span style={{ fontSize: '0.68rem', color: 'var(--secondary)', background: 'var(--secondary-glow)', padding: '2px 8px', borderRadius: '999px', border: '1px solid var(--secondary-glow)' }}>
             {s.videos.length} {t.clips}
           </span>
+          {/* Discreet "shared" cue — only meaningful once an account container is active. */}
+          {!!activeAccountId && isGeneralContainer(s.accountId) && (
+            <span
+              title={t.container_general_hint}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                fontSize: '0.65rem', color: 'var(--text-muted)', background: 'var(--bg-input)',
+                padding: '2px 7px', borderRadius: '999px', border: '1px solid var(--border)',
+              }}
+            >
+              <Globe size={10} /> {t.container_general_hint}
+            </span>
+          )}
           {productNames(s.productIds).map(pn => (
             <span key={pn} style={{ fontSize: '0.68rem', color: 'var(--primary)', background: 'var(--primary-glow)', padding: '2px 8px', borderRadius: '999px', border: '1px solid var(--primary-glow)', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '120px', whiteSpace: 'nowrap', display: 'inline-block' }}>
               {pn}

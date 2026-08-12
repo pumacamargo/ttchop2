@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { db } from '../services/databaseService';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import { db, getVisibleForContainer } from '../services/databaseService';
 import type { Product, Session } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import { SessionsPanel } from './SessionsPanel';
 import { SessionDetailModal } from './SessionDetailModal';
 
@@ -13,7 +14,8 @@ interface ProductClipsTabProps {
 // SessionDetailModal, both reused as-is) but scoped to sessions linked to this one product.
 export const ProductClipsTab: React.FC<ProductClipsTabProps> = ({ product }) => {
   const t = useT();
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const { activeAccountId } = useContainer();
+  const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
@@ -27,7 +29,7 @@ export const ProductClipsTab: React.FC<ProductClipsTabProps> = ({ product }) => 
         db.getSessionsForProduct(product.id),
         db.getProducts(),
       ]);
-      setSessions(sessionsData.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+      setAllSessions(sessionsData.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
       setProducts(productsData);
     } catch (err) {
       console.error(err);
@@ -36,6 +38,10 @@ export const ProductClipsTab: React.FC<ProductClipsTabProps> = ({ product }) => 
       setLoading(false);
     }
   }, [product.id, t.sessions_load_failed]);
+
+  // getSessionsForProduct() is scoped by productId but not by container — re-derive on
+  // activeAccountId change instead of re-fetching (same pattern as SessionsView).
+  const sessions = useMemo(() => getVisibleForContainer(allSessions, activeAccountId), [allSessions, activeAccountId]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -60,7 +66,7 @@ export const ProductClipsTab: React.FC<ProductClipsTabProps> = ({ product }) => 
       emptyTitle={t.product_clips_empty}
       emptyHint={t.product_clips_empty_hint}
       createLabel={t.create_new_session}
-      onCreate={async name => { await db.saveSession(name, [product.id]); await fetchAll(); }}
+      onCreate={async name => { await db.saveSession(name, [product.id], activeAccountId ?? undefined); await fetchAll(); }}
       onSelect={setSelectedSession}
     />
   );

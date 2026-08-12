@@ -6,6 +6,7 @@ import { db } from '../services/databaseService';
 import type { Product, Template, Session, ScheduledRender, ScheduledRenderType } from '../services/databaseService';
 import { scheduledAtUTC } from '../utils/calendarTime';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 
 const HORIZON_OPTIONS = [7, 14, 30];
 const VALID_TYPES: ScheduledRenderType[] = ['collage', 'overlay', 'collage+overlay', 'ai'];
@@ -83,6 +84,7 @@ interface CalendarStrategyPanelProps {
 
 export function CalendarStrategyPanel({ tz, todayStr, products, templates, sessions, scheduled, onAccepted }: CalendarStrategyPanelProps) {
   const t = useT();
+  const { activeAccountId } = useContainer();
   const [expanded, setExpanded] = useState(false);
 
   // ── Strategy text ──────────────────────────────────────────────────────
@@ -94,11 +96,14 @@ export function CalendarStrategyPanel({ tz, todayStr, products, templates, sessi
   const [strategySavedAt, setStrategySavedAt] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
 
+  // Strategy is one doc PER CONTAINER (see containerDocId() in databaseService.ts) — unlike the
+  // list collections elsewhere in this app, switching containers points at a different doc
+  // entirely, so this has to re-fetch (not just re-filter in-memory) on activeAccountId change.
   const loadStrategy = useCallback(async () => {
     setStrategyLoading(true);
     setStrategyLoadError('');
     try {
-      const data = await db.getCalendarStrategy();
+      const data = await db.getCalendarStrategy(activeAccountId ?? undefined);
       setStrategyText(data?.strategy || '');
       setStrategySavedAt(data?.updatedAt || null);
     } catch (err) {
@@ -107,7 +112,7 @@ export function CalendarStrategyPanel({ tz, todayStr, products, templates, sessi
     } finally {
       setStrategyLoading(false);
     }
-  }, [t.cal_strategy_load_error]);
+  }, [t.cal_strategy_load_error, activeAccountId]);
 
   useEffect(() => { loadStrategy(); }, [loadStrategy]);
 
@@ -122,7 +127,7 @@ export function CalendarStrategyPanel({ tz, todayStr, products, templates, sessi
     setStrategySaving(true);
     setStrategySaveError('');
     try {
-      await db.saveCalendarStrategy(strategyText);
+      await db.saveCalendarStrategy(strategyText, activeAccountId ?? undefined);
       setStrategySavedAt(new Date().toISOString());
       setJustSaved(true);
     } catch (err) {
@@ -224,7 +229,7 @@ export function CalendarStrategyPanel({ tz, todayStr, products, templates, sessi
           overlayTemplateId: p.overlayTemplateId,
           aiTemplateId: p.aiTemplateId,
           extraNotes: p.extraNotes,
-        });
+        }, activeAccountId ?? undefined);
       }
       setAcceptedMsg(t.cal_populate_accepted.replace('{count}', String(proposals.length)));
       setProposals([]);

@@ -8,9 +8,10 @@ import {
   LayoutDashboard, ShieldAlert, RefreshCw, ArrowUpRight, ArrowDownRight, Minus,
   Package, Video, LayoutTemplate, Scissors, Sparkles, Info,
 } from 'lucide-react';
-import { db } from '../services/databaseService';
+import { db, getVisibleForContainer } from '../services/databaseService';
 import type { AnalyticsOrder, Render, Template } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import type { Translations } from '../i18n';
 import {
   type Period, type RevenueBucket, type BucketGranularity,
@@ -239,9 +240,10 @@ const PERIOD_COMPARISON_KEY: Record<Period, keyof Translations | null> = {
 
 export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGoToAnalytics }) => {
   const t = useT();
+  const { activeAccountId } = useContainer();
 
-  const [orders, setOrders] = useState<AnalyticsOrder[]>([]);
-  const [renders, setRenders] = useState<Render[]>([]);
+  const [allOrders, setAllOrders] = useState<AnalyticsOrder[]>([]);
+  const [allRenders, setAllRenders] = useState<Render[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -261,8 +263,8 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
         db.getAnalyticsOrders(), db.getRenders(), db.getTemplates(),
       ]);
       if (!mountedRef.current) return;
-      setOrders(orderRows);
-      setRenders(renderRows);
+      setAllOrders(orderRows);
+      setAllRenders(renderRows);
       setTemplates(templateRows);
     } catch (err) {
       console.error(err);
@@ -273,6 +275,11 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   }, [t.dashboard_error_load]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Neither analytics_orders nor renders are container-filtered server side — re-derive on
+  // activeAccountId change instead of re-fetching (same pattern as AnalyticsView).
+  const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId), [allOrders, activeAccountId]);
+  const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
 
   const now = useMemo(() => new Date(), []);
 

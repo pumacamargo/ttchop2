@@ -6,6 +6,7 @@ import {
 import { db } from '../services/databaseService';
 import type { BrandFont } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import type { Translations } from '../i18n';
 
 const HEX_COLOR_RE = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
@@ -97,6 +98,7 @@ const ConfirmBar: React.FC<{ message: string; onConfirm: () => void; onCancel: (
 
 export const BrandConceptView: React.FC = () => {
   const t = useT();
+  const { activeAccountId } = useContainer();
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -128,11 +130,13 @@ export const BrandConceptView: React.FC = () => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fontInputRef = useRef<HTMLInputElement>(null);
 
+  // Brand concept is one doc PER CONTAINER (see containerDocId() in databaseService.ts) — switching
+  // containers points at a different doc entirely, so this has to re-fetch on activeAccountId change.
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError('');
     try {
-      const data = await db.getBrandConcept();
+      const data = await db.getBrandConcept(activeAccountId ?? undefined);
       setDescription(data?.description ?? '');
       setNiche(data?.niche ?? '');
       setStyle(data?.style ?? '');
@@ -146,7 +150,7 @@ export const BrandConceptView: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [t.brand_load_error]);
+  }, [t.brand_load_error, activeAccountId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -166,7 +170,7 @@ export const BrandConceptView: React.FC = () => {
     setSaving(true);
     setSaveError('');
     try {
-      await db.saveBrandConcept({ description, niche, style, colors });
+      await db.saveBrandConcept({ description, niche, style, colors }, activeAccountId ?? undefined);
       setUpdatedAt(new Date().toISOString());
       setJustSaved(true);
     } catch (err) {
@@ -208,7 +212,7 @@ export const BrandConceptView: React.FC = () => {
       const qid = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       setImageQueue(prev => [...prev, { id: qid, name: file.name, status: 'uploading' }]);
       try {
-        const url = await db.uploadBrandImage(file);
+        const url = await db.uploadBrandImage(file, activeAccountId ?? undefined);
         setImageUrls(prev => [...prev, url]);
         setImageQueue(prev => prev.map(item => item.id === qid ? { ...item, status: 'done' } : item));
       } catch (err) {
@@ -221,7 +225,7 @@ export const BrandConceptView: React.FC = () => {
   const handleDeleteImage = async (url: string) => {
     setImageActionError('');
     try {
-      await db.deleteBrandImage(url);
+      await db.deleteBrandImage(url, activeAccountId ?? undefined);
       setImageUrls(prev => prev.filter(u => u !== url));
     } catch (err) {
       console.error(err);
@@ -244,7 +248,7 @@ export const BrandConceptView: React.FC = () => {
       }
       setFontQueue(prev => [...prev, { id: qid, name: file.name, status: 'uploading' }]);
       try {
-        const font = await db.uploadBrandFont(file);
+        const font = await db.uploadBrandFont(file, activeAccountId ?? undefined);
         setFonts(prev => [...prev, font]);
         setFontQueue(prev => prev.map(item => item.id === qid ? { ...item, status: 'done' } : item));
       } catch (err) {
@@ -257,7 +261,7 @@ export const BrandConceptView: React.FC = () => {
   const handleDeleteFont = async (font: BrandFont) => {
     setFontActionError('');
     try {
-      await db.deleteBrandFont(font);
+      await db.deleteBrandFont(font, activeAccountId ?? undefined);
       setFonts(prev => prev.filter(f => fontKey(f) !== fontKey(font)));
     } catch (err) {
       console.error(err);

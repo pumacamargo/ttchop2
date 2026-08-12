@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Plus, X, Clock, Trash2, RefreshCw, Pencil, Copy, Sparkles, Scissors, Layers, Play, Share2, Upload } from 'lucide-react';
-import { db } from '../services/databaseService';
+import { db, getVisibleForContainer } from '../services/databaseService';
 import type { Product, Session, Template, ScheduledRender, Render } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import { CalendarStrategyPanel } from './CalendarStrategyPanel';
 import { TikTokUploadModal } from './TikTokUploadModal';
 import { scheduledAtUTC } from '../utils/calendarTime';
@@ -140,6 +141,7 @@ function DayRenderRow({ render: r, onUploaded }: { render: Render; onUploaded: (
 // ── Component ─────────────────────────────────────────────────────────────────
 export function CalendarView() {
   const t = useT();
+  const { activeAccountId } = useContainer();
   const DAYS_SHORT = t.days_short.split(',');
   const MONTHS = t.months_long.split(',');
 
@@ -162,12 +164,19 @@ export function CalendarView() {
   // Selected day
   const [selectedDay, setSelectedDay] = useState<string | null>(null); // 'YYYY-MM-DD'
 
-  // Data
-  const [products,  setProducts]  = useState<Product[]>([]);
-  const [sessions,  setSessions]  = useState<Session[]>([]);
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [scheduled, setScheduled] = useState<ScheduledRender[]>([]);
-  const [renders,   setRenders]   = useState<Render[]>([]);
+  // Data — raw fetch (unfiltered by container, see databaseService.ts comment on why that
+  // filter runs in JS); the container-scoped views used below are derived via useMemo so
+  // switching containers re-filters instantly without a re-fetch.
+  const [allProducts,  setAllProducts]  = useState<Product[]>([]);
+  const [allSessions,  setAllSessions]  = useState<Session[]>([]);
+  const [templates,    setTemplates]    = useState<Template[]>([]);
+  const [allScheduled, setAllScheduled] = useState<ScheduledRender[]>([]);
+  const [allRenders,   setAllRenders]   = useState<Render[]>([]);
+
+  const products  = useMemo(() => getVisibleForContainer(allProducts, activeAccountId), [allProducts, activeAccountId]);
+  const sessions   = useMemo(() => getVisibleForContainer(allSessions, activeAccountId), [allSessions, activeAccountId]);
+  const scheduled  = useMemo(() => getVisibleForContainer(allScheduled, activeAccountId), [allScheduled, activeAccountId]);
+  const renders    = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
 
   // Form state
   const [nowStr, setNowStr] = useState('');
@@ -198,18 +207,18 @@ export function CalendarView() {
       db.getScheduledRenders(),
       db.getRenders(),
     ]);
-    setProducts(p);
-    setSessions(s);
+    setAllProducts(p);
+    setAllSessions(s);
     setTemplates(t);
-    setScheduled(sc);
-    setRenders(r);
+    setAllScheduled(sc);
+    setAllRenders(r);
   }, []);
 
   // Auto-poll every 5s while renders are pending/processing
   useEffect(() => {
     const hasPending = renders.some(r => r.status === 'pending' || r.status === 'processing');
     if (!hasPending) return;
-    const id = setInterval(() => db.getRenders().then(setRenders), 5000);
+    const id = setInterval(() => db.getRenders().then(setAllRenders), 5000);
     return () => clearInterval(id);
   }, [renders]);
 
@@ -320,7 +329,7 @@ export function CalendarView() {
       if (editingJobId) {
         await db.updateScheduledRender(editingJobId, payload);
       } else {
-        await db.createScheduledRender({ ...payload, status: 'pending' });
+        await db.createScheduledRender({ ...payload, status: 'pending' }, activeAccountId ?? undefined);
       }
       setShowForm(false);
       setEditingJobId(null);
@@ -408,7 +417,7 @@ export function CalendarView() {
           aiTemplateId: job.aiTemplateId || '',
           model: job.model || '',
           extraNotes: job.extraNotes || '',
-        });
+        }, activeAccountId ?? undefined);
       }
       setShowDupDay(false);
       setDupSourceDay('');

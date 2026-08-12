@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   FileBarChart, RefreshCw, AlertTriangle, Sparkles, Trash2, X, ChevronRight, Clock,
 } from 'lucide-react';
-import { db } from '../services/databaseService';
+import { db, getVisibleForContainer } from '../services/databaseService';
 import type {
   AnalyticsOrder, Render, BrandConcept, ReportHistoryEntry, ReportOrderSummary, ReportRenderInfo,
 } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import { renderMarkdown } from '../utils/markdown';
 
 // The server only ever needs a summary of recent activity, never the raw
@@ -80,6 +81,7 @@ const SectionCard: React.FC<{ title: string; icon: React.ReactNode; children: Re
 
 export const ReportsView: React.FC = () => {
   const t = useT();
+  const { activeAccountId } = useContainer();
   const reportLanguage = localStorage.getItem('ttchop_language') || 'English';
 
   const [loading, setLoading] = useState(true);
@@ -97,6 +99,11 @@ export const ReportsView: React.FC = () => {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState('');
 
+  // brand_concepts and calendar_strategy are one doc PER CONTAINER (see containerDocId() in
+  // databaseService.ts) — a different doc entirely per container, so this whole load has to
+  // re-run on activeAccountId change rather than just re-filtering in memory. Since it's
+  // re-running anyway, orders/renders/history (not container-filtered server side) are filtered
+  // right here too instead of via a separate useMemo layer — simplest option for this view.
   const loadAll = useCallback(async () => {
     setLoading(true);
     setLoadError('');
@@ -104,22 +111,22 @@ export const ReportsView: React.FC = () => {
       const [orderRows, renderRows, concept, calStrategy, historyRows] = await Promise.all([
         db.getAnalyticsOrders(),
         db.getRenders(),
-        db.getBrandConcept(),
-        db.getCalendarStrategy(),
+        db.getBrandConcept(activeAccountId ?? undefined),
+        db.getCalendarStrategy(activeAccountId ?? undefined),
         db.getReportHistory(),
       ]);
-      setOrders(orderRows);
-      setRenders(renderRows);
+      setOrders(getVisibleForContainer(orderRows, activeAccountId));
+      setRenders(getVisibleForContainer(renderRows, activeAccountId));
       setBrandConcept(concept);
       setStrategy(calStrategy?.strategy ?? '');
-      setHistory(historyRows);
+      setHistory(getVisibleForContainer(historyRows, activeAccountId));
     } catch (err) {
       console.error(err);
       setLoadError(t.reports_load_error);
     } finally {
       setLoading(false);
     }
-  }, [t.reports_load_error]);
+  }, [t.reports_load_error, activeAccountId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -138,7 +145,7 @@ export const ReportsView: React.FC = () => {
         renders: renders.map(toReportRender),
         language: reportLanguage,
       });
-      const entry = await db.saveReportToHistory(report);
+      const entry = await db.saveReportToHistory(report, activeAccountId ?? undefined);
       setHistory(prev => [entry, ...prev]);
       setOpenReport(entry);
     } catch (err) {

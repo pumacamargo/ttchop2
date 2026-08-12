@@ -1,13 +1,15 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { db } from '../services/databaseService';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { db, getVisibleForContainer } from '../services/databaseService';
 import type { Product, Session } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import { SessionsPanel } from './SessionsPanel';
 import { SessionDetailModal } from './SessionDetailModal';
 
 export const SessionsView: React.FC = () => {
   const t = useT();
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const { activeAccountId } = useContainer();
+  const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
@@ -18,7 +20,7 @@ export const SessionsView: React.FC = () => {
     setErrorMsg('');
     try {
       const [sessionsData, productsData] = await Promise.all([db.getSessions(), db.getProducts()]);
-      setSessions(sessionsData.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+      setAllSessions(sessionsData.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
       setProducts(productsData);
     } catch (err) {
       console.error(err);
@@ -27,6 +29,10 @@ export const SessionsView: React.FC = () => {
       setLoading(false);
     }
   }, [t.sessions_load_failed]);
+
+  // getSessions() fetches every session owned by the user unfiltered (see ProductsView for the
+  // same pattern) — re-derive on activeAccountId change instead of re-fetching.
+  const sessions = useMemo(() => getVisibleForContainer(allSessions, activeAccountId), [allSessions, activeAccountId]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -65,7 +71,7 @@ export const SessionsView: React.FC = () => {
         emptyTitle={t.no_sessions}
         emptyHint={t.no_sessions_hint}
         createLabel={t.create_new_session}
-        onCreate={async name => { await db.saveSession(name, []); await fetchAll(); }}
+        onCreate={async name => { await db.saveSession(name, [], activeAccountId ?? undefined); await fetchAll(); }}
         onSelect={setSelectedSession}
       />
     </div>

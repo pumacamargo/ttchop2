@@ -3,10 +3,11 @@ import {
   BarChart3, Upload, FileSpreadsheet, RefreshCw, ShieldAlert, CheckCircle2,
   AlertTriangle, X, Info, Sparkles, Scissors, Layers,
 } from 'lucide-react';
-import { db } from '../services/databaseService';
+import { db, getVisibleForContainer } from '../services/databaseService';
 import type { AnalyticsOrder, Render } from '../services/databaseService';
 import { parseAnalyticsFile, AnalyticsImportError } from '../services/analyticsImport';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import type { Translations } from '../i18n';
 import {
   type Period, filterByPeriod, formatCurrency, aggregateBy, aggregateByProduct, buildVideoRevenue, computeOrderMetrics,
@@ -32,9 +33,10 @@ function mapImportError(err: AnalyticsImportError, t: Translations): string {
 
 export const AnalyticsView: React.FC = () => {
   const t = useT();
+  const { activeAccountId } = useContainer();
 
-  const [orders, setOrders] = useState<AnalyticsOrder[]>([]);
-  const [renders, setRenders] = useState<Render[]>([]);
+  const [allOrders, setAllOrders] = useState<AnalyticsOrder[]>([]);
+  const [allRenders, setAllRenders] = useState<Render[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
@@ -51,8 +53,8 @@ export const AnalyticsView: React.FC = () => {
     setLoadError('');
     try {
       const [orderRows, renderRows] = await Promise.all([db.getAnalyticsOrders(), db.getRenders()]);
-      setOrders(orderRows);
-      setRenders(renderRows);
+      setAllOrders(orderRows);
+      setAllRenders(renderRows);
     } catch (err) {
       console.error(err);
       setLoadError(t.analytics_error_load);
@@ -62,6 +64,12 @@ export const AnalyticsView: React.FC = () => {
   }, [t.analytics_error_load]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Neither analytics_orders nor renders are container-filtered server side (see
+  // databaseService.ts) — re-derive on activeAccountId change instead of re-fetching. This is
+  // what keeps a TikTok account's sales from mixing with another account's or the general pool.
+  const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId), [allOrders, activeAccountId]);
+  const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
 
   // ── Currency: group by currency, never sum across currencies ──────────────
   const { currencies, selectedCurrency, setSelectedCurrency, currencyOrders } = useCurrencySelection(orders);
@@ -97,7 +105,7 @@ export const AnalyticsView: React.FC = () => {
 
     try {
       const parsed = await parseAnalyticsFile(file);
-      const { newCount, updatedCount } = await db.importAnalyticsOrders(parsed.orders);
+      const { newCount, updatedCount } = await db.importAnalyticsOrders(parsed.orders, activeAccountId ?? undefined);
       setImportSummary({
         total: parsed.totalRows,
         created: newCount,

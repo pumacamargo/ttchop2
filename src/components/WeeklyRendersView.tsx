@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { db } from '../services/databaseService';
+import { db, getVisibleForContainer } from '../services/databaseService';
 import type { Render } from '../services/databaseService';
 import {
   ChevronLeft, ChevronRight, RefreshCw,
   Sparkles, Scissors, Layers, Play, Share2,
 } from 'lucide-react';
+import { useContainer } from '../context/ContainerContext';
 
 // ── Week helpers ──────────────────────────────────────────────────────────────
 
@@ -164,18 +165,23 @@ const WeekRenderCard: React.FC<{ render: Render }> = ({ render }) => {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export const WeeklyRendersView: React.FC = () => {
-  const [renders, setRenders] = useState<Render[]>([]);
+  const { activeAccountId } = useContainer();
+  const [allRenders, setAllRenders] = useState<Render[]>([]);
   const [loading, setLoading] = useState(true);
   const [weekStart, setWeekStart] = useState<Date>(() => getWeekStart(new Date()));
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     const data = await db.getRenders();
-    setRenders(data);
+    setAllRenders(data);
     if (!silent) setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // getRenders() isn't container-filtered server side — re-derive on activeAccountId change
+  // instead of re-fetching (same pattern as ProductsView/SessionsView).
+  const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
 
   useEffect(() => {
     const hasPending = renders.some(r => r.status === 'pending' || r.status === 'processing');

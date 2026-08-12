@@ -1,16 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { db } from '../services/databaseService';
+import React, { useState, useEffect, useMemo } from 'react';
+import { db, getVisibleForContainer, isGeneralContainer } from '../services/databaseService';
 import type { Product } from '../services/databaseService';
-import { ShieldAlert, Package } from 'lucide-react';
+import { ShieldAlert, Package, Globe } from 'lucide-react';
 import { ProductDetailModal } from './ProductDetailModal';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 
 const REGION_FLAGS: Record<string, string> = { jp: '🇯🇵', mx: '🇲🇽' };
 const REGION_ORDER = ['jp', 'mx'];
 
 export const ProductsView: React.FC = () => {
   const t = useT();
-  const [products, setProducts] = useState<Product[]>([]);
+  const { activeAccountId } = useContainer();
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
@@ -21,7 +23,7 @@ export const ProductsView: React.FC = () => {
   const fetchProducts = async () => {
     setLoading(true);
     try {
-      setProducts(await db.getProducts());
+      setAllProducts(await db.getProducts());
     } catch (err) {
       console.error(err);
       setErrorMsg('Failed to connect to the products database.');
@@ -29,6 +31,12 @@ export const ProductsView: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // getProducts() already fetches every product owned by the user (no accountId filter server
+  // side — see databaseService.ts comment on why that filter runs in JS). Re-deriving this on
+  // every activeAccountId change means switching containers updates the list instantly without
+  // a re-fetch.
+  const products = useMemo(() => getVisibleForContainer(allProducts, activeAccountId), [allProducts, activeAccountId]);
 
   if (selectedProduct) {
     return (
@@ -118,7 +126,7 @@ export const ProductsView: React.FC = () => {
       ) : (
         <div className="product-grid">
           {filtered.map(p => (
-            <ProductCard key={p.id} product={p} onClick={() => setSelectedProduct(p)} />
+            <ProductCard key={p.id} product={p} onClick={() => setSelectedProduct(p)} showSharedBadge={!!activeAccountId} />
           ))}
         </div>
       )}
@@ -126,7 +134,7 @@ export const ProductsView: React.FC = () => {
   );
 };
 
-const ProductCard: React.FC<{ product: Product; onClick: () => void }> = ({ product: p, onClick }) => {
+const ProductCard: React.FC<{ product: Product; onClick: () => void; showSharedBadge: boolean }> = ({ product: p, onClick, showSharedBadge }) => {
   const t = useT();
   return (
   <div
@@ -157,6 +165,22 @@ const ProductCard: React.FC<{ product: Product; onClick: () => void }> = ({ prod
           whiteSpace: 'nowrap'
         }}>
           {REGION_FLAGS[p.region]} {p.region === 'mx' ? t.region_mx : p.region === 'jp' ? t.region_jp : p.region}
+        </span>
+      )}
+      {/* Discreet "shared" cue — only meaningful once an account container is active, since
+          otherwise every product is trivially in the general container. */}
+      {showSharedBadge && isGeneralContainer(p.accountId) && (
+        <span
+          title={t.container_general_hint}
+          style={{
+            position: 'absolute', top: '0.5rem', right: '0.5rem',
+            background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(8px)',
+            color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)',
+            width: '20px', height: '20px', borderRadius: '999px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <Globe size={11} />
         </span>
       )}
     </div>

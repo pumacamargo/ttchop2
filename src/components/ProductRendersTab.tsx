@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { db } from '../services/databaseService';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import { db, getVisibleForContainer } from '../services/databaseService';
 import type { Product, Render } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
+import { useContainer } from '../context/ContainerContext';
 import { RefreshCw, Sparkles, Scissors, Layers, Play, Share2, ShieldAlert, Film, Link2, Check, Pencil } from 'lucide-react';
 
 interface ProductRendersTabProps {
@@ -12,7 +13,8 @@ interface ProductRendersTabProps {
 // and filter client-side by productId — matches the instruction not to add a new query method.
 export const ProductRendersTab: React.FC<ProductRendersTabProps> = ({ product }) => {
   const t = useT();
-  const [renders, setRenders] = useState<Render[]>([]);
+  const { activeAccountId } = useContainer();
+  const [allRenders, setAllRenders] = useState<Render[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -21,7 +23,7 @@ export const ProductRendersTab: React.FC<ProductRendersTabProps> = ({ product })
     setErrorMsg('');
     try {
       const all = await db.getRenders();
-      setRenders(all.filter(r => r.productId === product.id));
+      setAllRenders(all.filter(r => r.productId === product.id));
     } catch (err) {
       console.error(err);
       setErrorMsg(t.renders_load_failed);
@@ -31,6 +33,10 @@ export const ProductRendersTab: React.FC<ProductRendersTabProps> = ({ product })
   }, [product.id, t.renders_load_failed]);
 
   useEffect(() => { load(); }, [load]);
+
+  // getRenders() isn't container-filtered server side — re-derive on activeAccountId change
+  // instead of re-fetching (same pattern as ProductsView/SessionsView).
+  const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
 
   // Poll while something is still rendering, same pattern as WeeklyRendersView.
   useEffect(() => {
