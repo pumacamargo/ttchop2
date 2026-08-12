@@ -1,6 +1,7 @@
 importScripts('firebase-config.js');
 
 const AUTH_KEY = 'ttchop_auth';
+const TIKTOK_ACCOUNTS_URL = 'https://us-central1-ttchop2.cloudfunctions.net/tiktokAccounts';
 
 async function getStoredAuth() {
   const data = await chrome.storage.local.get(AUTH_KEY);
@@ -86,7 +87,24 @@ function toFirestoreFields(product) {
   if (product.sourceId) fields.sourceId = { stringValue: product.sourceId };
   if (product.sourceUrl) fields.sourceUrl = { stringValue: product.sourceUrl };
   if (product.scrapedAt) fields.scrapedAt = { stringValue: product.scrapedAt };
+  // accountId solo se escribe si hay un contenedor de cuenta elegido: el
+  // contenedor "General" se representa como AUSENCIA del campo, nunca ''.
+  if (product.accountId) fields.accountId = { stringValue: product.accountId };
   return fields;
+}
+
+// Cuentas de TikTok conectadas (sin datos sensibles), vía Cloud Function.
+// Se usa para ofrecer el selector de contenedor al importar.
+async function fetchTikTokAccounts(auth) {
+  const res = await fetch(TIKTOK_ACCOUNTS_URL, {
+    headers: { Authorization: `Bearer ${auth.idToken}` }
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error?.message || `Error al obtener las cuentas (${res.status})`);
+  }
+  const data = await res.json();
+  return data.accounts || [];
 }
 
 async function findExistingProductBySourceId(auth, sourceId) {
@@ -152,11 +170,15 @@ async function updateProduct(auth, prodId, scraped) {
     region: scraped.regionCode || null,
     sourceId: scraped.sourceId || null,
     sourceUrl: scraped.sourceUrl || null,
+    accountId: scraped.accountId || null,
     scrapedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 
-  const fieldsToUpdate = ['name', 'description', 'modelSheetUrls', 'region', 'sourceId', 'sourceUrl', 'scrapedAt', 'updatedAt'];
+  // accountId va en el mask aunque venga vacío: así, si el producto ya
+  // existía y se re-scrapea eligiendo otro contenedor (o "General"), el
+  // campo se actualiza o se borra del documento en vez de quedar viejo.
+  const fieldsToUpdate = ['name', 'description', 'modelSheetUrls', 'region', 'sourceId', 'sourceUrl', 'accountId', 'scrapedAt', 'updatedAt'];
   const mask = fieldsToUpdate.map(f => `updateMask.fieldPaths=${f}`).join('&');
   const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents/products/${prodId}?${mask}`;
 
@@ -200,6 +222,7 @@ async function createProduct(auth, scraped) {
     region: scraped.regionCode || null,
     sourceId: scraped.sourceId || null,
     sourceUrl: scraped.sourceUrl || null,
+    accountId: scraped.accountId || null,
     scrapedAt: new Date().toISOString(),
     createdAt: new Date().toISOString()
   };
@@ -234,6 +257,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       } else if (message.type === 'GET_SESSION') {
         const auth = await getStoredAuth();
         sendResponse({ ok: true, email: auth?.email || null });
+      } else if (message.type === 'GET_ACCOUNTS') {
+        const auth = await getValidAuth();
+        if (!auth) {
+          sendResponse({ ok: false, error: 'NOT_LOGGED_IN' });
+          return;
+        }
+        const accounts = await fetchTikTokAccounts(auth);
+        sendResponse({ ok: true, accounts });
       } else if (message.type === 'CREATE_PRODUCT') {
         const auth = await getValidAuth();
         if (!auth) {

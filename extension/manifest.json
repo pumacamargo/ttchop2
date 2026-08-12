@@ -8,7 +8,8 @@
     "https://*.tiktok.com/*",
     "https://identitytoolkit.googleapis.com/*",
     "https://securetoken.googleapis.com/*",
-    "https://firestore.googleapis.com/*"
+    "https://firestore.googleapis.com/*",
+    "https://us-central1-ttchop2.cloudfunctions.net/*"
   ],
   "background": {
     "service_worker": "background.js"
