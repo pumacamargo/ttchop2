@@ -343,6 +343,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                     }
                     currentLabel={t.dashboard_history_current}
                     deltaLabel={t.dashboard_history_previous}
+                    unitsLabel={t.analytics_metric_units}
                     emptyText={t.dashboard_history_empty}
                   />
                 </SectionCard>

@@ -255,6 +255,14 @@ export const DailyPerformanceChart: React.FC<{
   );
 };
 
+/** Rango del bloque en formato corto: el tooltip necesita decir de qué fechas habla. */
+const fmtRange = (p: PeriodHistoryPoint): string => {
+  const d = (x: Date) => x.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  // El fin del bloque es exclusivo; se muestra el último día incluido para que no confunda.
+  const lastDay = new Date(p.end.getTime() - 86400000);
+  return `${d(p.start)} – ${d(lastDay)}`;
+};
+
 // ── Historial por bloques de período ────────────────────────────────────────
 // Una sola línea donde cada punto es UN período completo agregado: el de la derecha es el
 // período en curso, el de su izquierda son los 7 días (o 30 días / 6 meses) previos, y así
@@ -265,8 +273,13 @@ export const PeriodHistoryChart: React.FC<{
   blockLabel: string;
   currentLabel: string;
   deltaLabel: string;
+  unitsLabel: string;
   emptyText: string;
-}> = ({ points, blockLabel, currentLabel, deltaLabel, emptyText }) => {
+}> = ({ points, blockLabel, currentLabel, deltaLabel, unitsLabel, emptyText }) => {
+  // Punto con el detalle abierto. Hover en escritorio, tap en móvil — el mismo estado sirve
+  // para los dos, y el foco de teclado lo abre igual para quien no usa mouse.
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+
   if (points.length === 0 || points.every(p => p.unitsSold === 0)) {
     return <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0 }}>{emptyText}</p>;
   }
@@ -330,25 +343,84 @@ export const PeriodHistoryChart: React.FC<{
           {/* Los puntos van como overlay HTML, no como <circle>: dentro del SVG estirado
               (preserveAspectRatio="none") se deforman en elipses al ensanchar la pantalla. */}
           {xy.map((q, i) => {
+            const active = activeIdx === i;
             const size = i === n - 1 ? 9 : 7;
+            const pct = (q.x / VB_W) * 100;
+            const label = i === n - 1 ? currentLabel : `-${points[i].offset}`;
             return (
-              <span
+              <button
                 key={points[i].offset}
+                type="button"
+                onMouseEnter={() => setActiveIdx(i)}
+                onMouseLeave={() => setActiveIdx(null)}
+                onFocus={() => setActiveIdx(i)}
+                onBlur={() => setActiveIdx(null)}
+                onClick={() => setActiveIdx(active ? null : i)}
+                aria-label={`${label}: ${points[i].unitsSold.toLocaleString()} ${unitsLabel} (${fmtRange(points[i])})`}
                 style={{
+                  // El botón es un blanco táctil de 32px centrado en el punto; el círculo visible
+                  // va dentro, así se puede tocar en móvil sin agrandar el punto.
                   position: 'absolute',
-                  left: `${(q.x / VB_W) * 100}%`,
+                  left: `${pct}%`,
                   top: `${(q.y / VB_H) * H}px`,
-                  width: size, height: size,
-                  marginLeft: -size / 2, marginTop: -size / 2,
-                  borderRadius: '50%',
-                  background: i === n - 1 ? 'var(--secondary)' : 'var(--bg-space)',
-                  border: '1.5px solid var(--secondary)',
-                  boxSizing: 'border-box',
-                  pointerEvents: 'none',
+                  width: 32, height: 32, marginLeft: -16, marginTop: -16,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                 }}
-              />
+              >
+                <span
+                  style={{
+                    width: active ? size + 3 : size,
+                    height: active ? size + 3 : size,
+                    borderRadius: '50%',
+                    background: active || i === n - 1 ? 'var(--secondary)' : 'var(--bg-space)',
+                    border: '1.5px solid var(--secondary)',
+                    boxSizing: 'border-box',
+                    transition: 'width 120ms ease, height 120ms ease',
+                  }}
+                />
+              </button>
             );
           })}
+
+          {/* Detalle del punto activo. Se ancla al punto y se recuesta contra el borde en los
+              extremos para no salirse de la tarjeta. */}
+          {activeIdx !== null && (() => {
+            const p = points[activeIdx];
+            const pct = (xy[activeIdx].x / VB_W) * 100;
+            const atStart = pct < 20;
+            const atEnd = pct > 80;
+            const dotY = (xy[activeIdx].y / VB_H) * H;
+            // Sin espacio arriba (punto cerca del máximo) el detalle se voltea hacia abajo
+            // en vez de escaparse de la gráfica.
+            const below = dotY < 52;
+            return (
+              <div
+                role="tooltip"
+                style={{
+                  position: 'absolute',
+                  left: `${pct}%`,
+                  top: `${dotY + (below ? 14 : -14)}px`,
+                  transform: `translate(${atStart ? '0' : atEnd ? '-100%' : '-50%'}, ${below ? '0' : '-100%'})`,
+                  background: 'var(--bg-card-hover)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '0.35rem 0.5rem',
+                  pointerEvents: 'none',
+                  whiteSpace: 'nowrap',
+                  zIndex: 2,
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+                }}
+              >
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
+                  {p.unitsSold.toLocaleString()} <span style={{ fontSize: '0.62rem', fontWeight: 500, color: 'var(--text-muted)' }}>{unitsLabel}</span>
+                </div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
+                  {activeIdx === n - 1 ? currentLabel : `-${p.offset}`} · {fmtRange(p)}
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Etiquetas del eje X: cuántos bloques atrás está cada punto. */}
