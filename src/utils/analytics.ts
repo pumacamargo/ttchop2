@@ -625,6 +625,9 @@ export function templateNameResolver(templates: { id: string; title: string }[])
   return (id: string | undefined): string | undefined => id ? (byId.get(id) ?? id) : undefined;
 }
 
+/** Métrica que se puede graficar a nivel de bloque histórico. */
+export type HistoryMetric = 'revenue' | 'gmv' | 'units';
+
 /** Un bloque completo del período (7d, 30d o 6 meses) agregado a un solo punto. */
 export interface PeriodHistoryPoint {
   /** 0 = período actual, 1 = el inmediatamente anterior, 2 = el de antes, etc. */
@@ -632,6 +635,16 @@ export interface PeriodHistoryPoint {
   start: Date;
   end: Date;
   unitsSold: number;
+  gmv: number;
+  /** Comisión de solo órdenes liquidadas — misma regla que el KPI de Comisión. */
+  revenue: number;
+}
+
+/** Extrae la métrica seleccionada de un punto histórico. */
+export function valueOfHistoryMetric(p: PeriodHistoryPoint, metric: HistoryMetric): number {
+  if (metric === 'gmv') return p.gmv;
+  if (metric === 'revenue') return p.revenue;
+  return p.unitsSold;
 }
 
 /** Cuántos bloques hacia atrás mostramos como máximo: más que esto se vuelve ilegible en móvil. */
@@ -641,7 +654,8 @@ const MAX_HISTORY_BLOCKS = 8;
  * Serie histórica de bloques del tamaño del período: cada punto es UN período completo,
  * no un día dentro de él. El punto de la derecha es el período en curso, el anterior son
  * los 7 (o 30 días / 6 meses) previos, y así hacia atrás. Sirve para ver la tendencia
- * de período a período, que es lo que dos totales sueltos no dicen.
+ * de período a período, que es lo que dos totales sueltos no dicen. Cada bloque lleva
+ * unidades, GMV y comisión liquidadas — la gráfica decide cuál destacar (valueOfHistoryMetric).
  *
  * Null para 'all': el máximo histórico es un solo bloque, no hay tendencia que trazar.
  */
@@ -672,12 +686,17 @@ export function buildPeriodHistory(
     start: blockStart(i),
     end: i === 0 ? now : blockStart(i - 1),
     unitsSold: 0,
+    gmv: 0,
+    revenue: 0,
   }));
 
   dated.forEach(o => {
     const t = new Date(o.orderDate as string).getTime();
     const hit = points.find(p => t >= p.start.getTime() && t < p.end.getTime());
-    if (hit) hit.unitsSold += o.itemsSold;
+    if (!hit) return;
+    hit.unitsSold += o.itemsSold;
+    hit.gmv += o.gmv;
+    if (o.settlementStatus === 'Settled') hit.revenue += o.totalFinalEarnedAmount;
   });
 
   // Un solo bloque no es una tendencia: no hay nada contra qué comparar, así que no se dibuja.

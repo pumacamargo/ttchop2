@@ -190,8 +190,8 @@ export const AnalyticsView: React.FC = () => {
   const [loadError, setLoadError] = useState('');
   const [showManageImports, setShowManageImports] = useState(false);
 
-  // 15 días es la ventana de trabajo por defecto: suficiente para ver tendencia sin diluirla.
-  const [period, setPeriod] = useState<Period>('d15');
+  // 30 días es la ventana de trabajo por defecto.
+  const [period, setPeriod] = useState<Period>('d30');
   const [videoSortKey, setVideoSortKey] = useState<VideoSortKey>('views');
   const [videoSortDir, setVideoSortDir] = useState<'asc' | 'desc'>('desc');
   // Filters the whole publishing-performance section by captured TikTok handle. Derived purely

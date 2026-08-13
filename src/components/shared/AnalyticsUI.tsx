@@ -2,8 +2,8 @@
 // the same shape of data (currency amounts, category bars, settlement splits) and should look
 // like one system rather than two hand-rolled copies.
 import React, { useRef, useState } from 'react';
-import type { DailyPerformanceBucket, BucketGranularity, PeriodHistoryPoint } from '../../utils/analytics';
-import { formatBucketLabel } from '../../utils/analytics';
+import type { DailyPerformanceBucket, BucketGranularity, PeriodHistoryPoint, HistoryMetric } from '../../utils/analytics';
+import { formatBucketLabel, valueOfHistoryMetric } from '../../utils/analytics';
 
 export const SectionCard: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div className="glass-card" style={{ padding: '0.9rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
@@ -267,20 +267,27 @@ const fmtRange = (p: PeriodHistoryPoint): string => {
 // Una sola línea donde cada punto es UN período completo agregado: el de la derecha es el
 // período en curso, el de su izquierda son los 7 días (o 30 días / 6 meses) previos, y así
 // hacia atrás. Puntos marcados para que cada bloque se lea como un valor discreto, no como
-// una curva continua — porque eso es lo que son.
+// una curva continua — porque eso es lo que son. El usuario elige qué métrica graficar
+// (comisión liquidad / GMV / unidades) con el mini-selector de arriba.
 export const PeriodHistoryChart: React.FC<{
   points: PeriodHistoryPoint[];
   blockLabel: string;
   currentLabel: string;
   deltaLabel: string;
-  unitsLabel: string;
   emptyText: string;
-}> = ({ points, blockLabel, currentLabel, deltaLabel, unitsLabel, emptyText }) => {
+  metricOptions: { key: HistoryMetric; label: string }[];
+  formatMetric: (metric: HistoryMetric, value: number) => string;
+}> = ({ points, blockLabel, currentLabel, deltaLabel, emptyText, metricOptions, formatMetric }) => {
+  // Unidades por defecto: es la métrica que el usuario reconoce a simple vista. El selector de
+  // arriba permite cambiar a comisión liquidad o GMV (sin el lag de liquidación).
+  const [metric, setMetric] = useState<HistoryMetric>('units');
   // Punto con el detalle abierto. Hover en escritorio, tap en móvil — el mismo estado sirve
   // para los dos, y el foco de teclado lo abre igual para quien no usa mouse.
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
 
-  if (points.length === 0 || points.every(p => p.unitsSold === 0)) {
+  const valueOf = (p: PeriodHistoryPoint) => valueOfHistoryMetric(p, metric);
+
+  if (points.length === 0 || points.every(p => valueOf(p) === 0)) {
     return <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0 }}>{emptyText}</p>;
   }
 
@@ -291,28 +298,48 @@ export const PeriodHistoryChart: React.FC<{
   const PAD_BOTTOM = 20;
   const n = points.length;
   const usableH = VB_H - PAD_TOP - PAD_BOTTOM;
-  const maxVal = Math.max(1, ...points.map(p => p.unitsSold));
+  const maxVal = Math.max(1, ...points.map(valueOf));
   const baselineY = VB_H - PAD_BOTTOM;
 
   const xy = points.map((p, i) => ({
     x: n === 1 ? VB_W / 2 : (i / (n - 1)) * VB_W,
-    y: PAD_TOP + usableH - (p.unitsSold / maxVal) * usableH,
+    y: PAD_TOP + usableH - (valueOf(p) / maxVal) * usableH,
   }));
   const path = xy.map((q, i) => `${i === 0 ? 'M' : 'L'} ${q.x.toFixed(2)},${q.y.toFixed(2)}`).join(' ');
 
   const current = points[n - 1];
   const previous = n > 1 ? points[n - 2] : null;
-  const deltaPct = previous && previous.unitsSold > 0
-    ? ((current.unitsSold - previous.unitsSold) / previous.unitsSold) * 100
+  const deltaPct = previous && valueOf(previous) > 0
+    ? ((valueOf(current) - valueOf(previous)) / valueOf(previous)) * 100
     : null;
   const deltaColor = deltaPct === null ? 'var(--text-muted)'
     : deltaPct >= 0 ? 'var(--success)' : 'var(--danger)';
 
   return (
     <div>
+      {/* Selector de métrica: compacto, deja claro que la tendencia se puede ver en dinero
+          o en volumen. */}
+      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginBottom: '0.55rem' }}>
+        {metricOptions.map(opt => (
+          <button
+            key={opt.key}
+            onClick={() => { setMetric(opt.key); setActiveIdx(null); }}
+            style={{
+              padding: '0.25rem 0.7rem', borderRadius: '999px',
+              fontSize: '0.62rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+              background: metric === opt.key ? 'var(--gradient)' : 'var(--bg-card)',
+              color: metric === opt.key ? '#fff' : 'var(--text-secondary)',
+              border: metric === opt.key ? '1px solid transparent' : '1px solid var(--border)',
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.55rem' }}>
         <span style={{ fontSize: '1.15rem', fontWeight: 800, fontFamily: 'var(--font-heading)', color: 'var(--text-primary)' }}>
-          {current.unitsSold.toLocaleString()}
+          {formatMetric(metric, valueOf(current))}
         </span>
         {deltaPct !== null && (
           <span style={{ fontSize: '0.75rem', fontWeight: 700, color: deltaColor }}>
@@ -321,7 +348,7 @@ export const PeriodHistoryChart: React.FC<{
         )}
         {previous && (
           <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-            {deltaLabel} ({previous.unitsSold.toLocaleString()})
+            {deltaLabel} ({formatMetric(metric, valueOf(previous))})
           </span>
         )}
       </div>
@@ -329,7 +356,7 @@ export const PeriodHistoryChart: React.FC<{
       <div style={{ position: 'relative', paddingLeft: '1.7rem' }}>
         {/* Escala como overlay HTML: el SVG usa preserveAspectRatio="none" y deformaría el texto. */}
         <span style={{ position: 'absolute', left: 0, top: `${(PAD_TOP / VB_H) * H - 6}px`, fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1 }}>
-          {maxVal.toLocaleString()}
+          {formatMetric(metric, maxVal)}
         </span>
         <span style={{ position: 'absolute', left: 0, top: `${(baselineY / VB_H) * H - 5}px`, fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1 }}>0</span>
 
@@ -356,7 +383,7 @@ export const PeriodHistoryChart: React.FC<{
                 onFocus={() => setActiveIdx(i)}
                 onBlur={() => setActiveIdx(null)}
                 onClick={() => setActiveIdx(active ? null : i)}
-                aria-label={`${label}: ${points[i].unitsSold.toLocaleString()} ${unitsLabel} (${fmtRange(points[i])})`}
+                aria-label={`${label}: ${formatMetric(metric, valueOf(points[i]))} (${fmtRange(points[i])})`}
                 style={{
                   // El botón es un blanco táctil de 32px centrado en el punto; el círculo visible
                   // va dentro, así se puede tocar en móvil sin agrandar el punto.
@@ -413,7 +440,7 @@ export const PeriodHistoryChart: React.FC<{
                 }}
               >
                 <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
-                  {p.unitsSold.toLocaleString()} <span style={{ fontSize: '0.62rem', fontWeight: 500, color: 'var(--text-muted)' }}>{unitsLabel}</span>
+                  {formatMetric(metric, valueOf(p))}
                 </div>
                 <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
                   {activeIdx === n - 1 ? currentLabel : `-${p.offset}`} · {fmtRange(p)}

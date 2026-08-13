@@ -126,8 +126,8 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  // 15 días es la ventana de trabajo por defecto: suficiente para ver tendencia sin diluirla.
-  const [period, setPeriod] = useState<Period>('d15');
+  // 30 días es la ventana de trabajo por defecto.
+  const [period, setPeriod] = useState<Period>('d30');
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -193,6 +193,41 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   const currentMetrics = useMemo(() => computeOrderMetrics(periodOrders), [periodOrders]);
   const previousMetrics = useMemo(() => computeOrderMetrics(previousPeriodOrders), [previousPeriodOrders]);
 
+  // ── Veredicto de crecimiento ────────────────────────────────────────────────
+  // Signal primaria: el delta de GMV (vs. el lag de liquidación de la comisión, que hace
+  // que el "Revenue" de un período reciente mienta hacia abajo). El resto de KPIs aclaran.
+  const growthDelta = delta(currentMetrics.gmvTotal, previousMetrics.gmvTotal);
+  const growthVerdict: 'dashboard_verdict_growing' | 'dashboard_verdict_declining' | 'dashboard_verdict_steady' | null =
+    growthDelta === null ? null
+      : growthDelta > 0 ? 'dashboard_verdict_growing'
+      : growthDelta < 0 ? 'dashboard_verdict_declining'
+      : 'dashboard_verdict_steady';
+  const growthVerdictColor = growthVerdict === null ? null
+    : growthVerdict === 'dashboard_verdict_growing' ? 'var(--success)'
+    : growthVerdict === 'dashboard_verdict_declining' ? 'var(--danger)'
+    : 'var(--text-muted)';
+
+  // Tasa de liquidación del período en curso: si quedan órdenes sin liquidar, la comisión
+  // mostrada está subestimada y el usuario necesita saberlo antes de leerlo como una caída.
+  const settlementPct = currentMetrics.orderCount > 0 ? Math.round(currentMetrics.settlementRate * 100) : null;
+
+  // Última importación entre las órdenes visibles — ancla la ventana móvil en el tiempo.
+  const lastImportLabel = useMemo(() => {
+    let latest = 0;
+    currencyOrders.forEach(o => {
+      if (!o.importedAt) return;
+      const t = new Date(o.importedAt).getTime();
+      if (Number.isFinite(t) && t > latest) latest = t;
+    });
+    if (latest === 0) return null;
+    const diff = Math.max(0, now.getTime() - latest);
+    const days = Math.floor(diff / 86_400_000);
+    if (days >= 1) return `${days}d`;
+    const hours = Math.floor(diff / 3_600_000);
+    if (hours >= 1) return `${hours}h`;
+    return `${Math.max(1, Math.floor(diff / 60_000))}m`;
+  }, [currencyOrders, now]);
+
   // Views KPI — cross-referenced from tiktok_videos (captured by the extension), not orders.
   // Its own "has previous data" flag: a period with no captured videos shouldn't be conflated
   // with a period that simply had no sales.
@@ -238,6 +273,11 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
         <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
           {t.dashboard_subtitle}
         </p>
+        {lastImportLabel && (
+          <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+            {t.dashboard_last_import.replace('{when}', lastImportLabel)}
+          </p>
+        )}
       </div>
 
       {loading ? (
@@ -270,6 +310,22 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+          {/* Veredicto de crecimiento: una sola línea sobre si la cuenta está creciendo. */}
+          {growthVerdict !== null && growthDelta !== null && growthVerdictColor !== null && comparisonLabel && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.9rem',
+                borderRadius: '999px', fontSize: '0.74rem', fontWeight: 800, letterSpacing: '0.01em',
+                background: `color-mix(in srgb, ${growthVerdictColor} 12%, transparent)`,
+                color: growthVerdictColor, border: `1px solid color-mix(in srgb, ${growthVerdictColor} 35%, transparent)`,
+              }}>
+                {growthDelta > 0 ? <ArrowUpRight size={14} /> : growthDelta < 0 ? <ArrowDownRight size={14} /> : <Minus size={14} />}
+                {t[growthVerdict]} {growthDelta !== 0 && `${(growthDelta * 100).toFixed(1)}%`}
+              </span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{comparisonLabel}</span>
+            </div>
+          )}
 
           <PeriodSelector
             value={period}
@@ -330,6 +386,17 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                 />
               </div>
 
+              {/* Las órdenes recién vendidas aún no se liquidan; avisar antes de que el usuario
+                  lea la comisión como una caída real. */}
+              {settlementPct !== null && settlementPct < 100 && (
+                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start' }}>
+                  <Info size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
+                  <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
+                    {t.dashboard_settlement_rate.replace('{pct}', String(settlementPct))} — {t.dashboard_settlement_hint}.
+                  </p>
+                </div>
+              )}
+
               {/* Tendencia período a período. No aplica en 'Máximo'. */}
               {history && (
                 <SectionCard title={t.dashboard_history_title}>
@@ -343,8 +410,15 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                     }
                     currentLabel={t.dashboard_history_current}
                     deltaLabel={t.dashboard_history_previous}
-                    unitsLabel={t.analytics_metric_units}
                     emptyText={t.dashboard_history_empty}
+                    metricOptions={[
+                      { key: 'units', label: t.analytics_metric_units },
+                      { key: 'gmv', label: t.analytics_metric_gmv },
+                      { key: 'revenue', label: t.analytics_metric_revenue },
+                    ]}
+                    formatMetric={(metric, value) =>
+                      metric === 'units' ? value.toLocaleString() : formatCurrency(value, selectedCurrency)
+                    }
                   />
                 </SectionCard>
               )}
