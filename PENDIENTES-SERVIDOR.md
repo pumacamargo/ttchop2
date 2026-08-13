@@ -2,6 +2,19 @@
 
 > **Importante**: `ttchop-server` es un proyecto aparte que **no vive en este repositorio** (`ttchop2`). Este archivo documenta, desde el lado del cliente, qué endpoints faltan implementar allá para que funciones ya construidas en el frontend dejen de estar "apagadas". El cliente ya está preparado para consumirlos — solo falta el lado del servidor.
 
+**Estado al 2026-08-13** (verificado contra el servidor en vivo y contra `/root/ttchop-server`):
+
+| Tema | Estado |
+|---|---|
+| `POST /calendar/populate` | ⏳ **pendiente** — el servidor no tiene la ruta |
+| `POST /reports/generate` | ⏳ **pendiente** — el servidor no tiene la ruta |
+| `POST /ai/meta` | ⏳ **pendiente** — el cliente lo esquiva llamando a n8n directo |
+| CORS para `ttchop2.web.app` | ✅ **resuelto** |
+| Escritura al proyecto correcto (`projectId`) | ✅ **resuelto** |
+
+Las dos secciones resueltas se dejan al final del archivo como registro de qué falló y cómo se
+arregló, no como trabajo pendiente.
+
 ---
 
 ## `POST /calendar/populate` (Phase 4 — Calendario con Estrategia)
@@ -215,7 +228,12 @@ llamada vuelva a `ttchop-server` sin ningún otro cambio.
 
 ---
 
-## CORS: falta permitir el dominio de ttchop2 — BLOQUEA TODO EL PIPELINE
+## ✅ RESUELTO — CORS: faltaba permitir el dominio de ttchop2
+
+> **Resuelto el 2026-08-12.** `ttchop-server/server.js:15` ya incluye `https://ttchop2.web.app` en
+> la lista blanca. Verificado el 2026-08-13 con un preflight real: el servidor responde
+> `access-control-allow-origin: https://ttchop2.web.app`. Se conserva el detalle de abajo como
+> registro del diagnóstico.
 
 ### Síntoma
 Cualquier acción que llame al servidor (generar diálogo, generar collage, generar video AI,
@@ -246,7 +264,16 @@ código de la app pueda verla.
 
 ---
 
-## El servidor escribe el resultado al proyecto equivocado — BLOQUEA TODOS LOS RENDERS
+## ✅ RESUELTO — El servidor escribía el resultado al proyecto equivocado
+
+> **Resuelto el 2026-08-11.** El servidor ahora maneja múltiples proyectos: `pipeline/firebase.js`
+> tiene un registro con `getDb(projectId)` / `getBucket(projectId)` y `DEFAULT_PROJECT_ID = 'ttchop'`,
+> y las rutas (`collage`, `overlay`, `ai`) leen el `projectId` del payload. Del lado del cliente,
+> `databaseService.ts` manda `projectId: FIREBASE_PROJECT_ID` en cada llamada.
+>
+> **Cuidado al agregar un endpoint nuevo**: si el payload no lleva `projectId`, el servidor cae al
+> default (`ttchop`) y el resultado se escribe al proyecto equivocado sin fallar en voz alta.
+> Se conserva el detalle de abajo como registro del diagnóstico.
 
 ### Síntoma
 Un collage se genera correctamente en el servidor, pero en el calendario de ttchop2 se queda en

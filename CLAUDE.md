@@ -2,295 +2,214 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **In active migration** toward "AI Video Studio" (Productos / Templates / Videos, with Video AI + real timeline editing). See `PLAN.md` at repo root for the full phased plan, current progress, and known pending items before touching product/template/editing code.
+> **Regla #1 del proyecto: `/root/ttchop` (la app original) es INTOCABLE.** TTChop2 es un fork
+> independiente con su propio proyecto de Firebase. Nada de lo que se haga aquí puede tocar el
+> repo, el proyecto de Firebase, ni los datos de `ttchop`. Verificar con `git -C /root/ttchop status`
+> si hay cualquier duda.
 
-## Project Overview
+## Qué es TTChop2
 
-**TTChop** is an AI-powered UGC (User-Generated Content) video creation platform that helps brands generate master marketing videos and create multiple variations by combining different B-roll sequences. Key features:
-- AI-powered script generation (Gemini API)
-- Text-to-speech voiceovers (ElevenLabs API)
-- Product library management with technical specifications
-- Video template system with marketing psychology guidelines
-- Duplicate video combination prevention for algorithmic safety
-- **Status**: MVP with mocked AI/video rendering
+Webapp **móvil-first** para vendedores de TikTok Shop: gestiona productos y clips, genera videos
+de marketing (guion + voz + render), los agenda, y cruza las ventas reales de TikTok Shop contra
+los videos publicados para saber qué está funcionando.
 
-## Technology Stack
+- **Producción**: https://ttchop2.web.app (proyecto Firebase `ttchop2`)
+- **Estado**: en producción con datos reales. El rediseño de secciones está completo; ver `PLAN.md`
+  para el estado por fase y lo que queda pendiente.
 
-- **Frontend**: React 19 + TypeScript 6 + Vite 8
-- **Database**: Firebase (Authentication, Firestore, Cloud Storage)
-- **UI**: lucide-react for icons, CSS3 with dark theme
-- **Build**: Vite with @vitejs/plugin-react (Oxc-based)
-- **Linting**: ESLint 10.3 + typescript-eslint
+## Stack
 
-## Common Development Commands
+- **Frontend**: React 19 + TypeScript + Vite 8 (plugin de React basado en Oxc)
+- **Backend**: Firebase (Auth, Firestore, Storage, Cloud Functions) + `ttchop-server` (VPS externo)
+- **UI**: `lucide-react`, CSS plano con variables en `index.css`, dark theme
+- **Datos**: `xlsx` para importar los reportes de TikTok Shop del lado del cliente
+- **Extensión**: Chrome MV3, JS plano sin build (carpeta `extension/`)
+
+## Comandos
 
 ```bash
-npm run dev       # Start dev server (localhost:5173) with HMR
-npm run build     # Type-check (tsc) then bundle with Vite
-npm run lint      # Run ESLint (no auto-fix)
-npm run preview   # Preview production build locally
+npm run dev       # dev server en localhost:5173
+npm run build     # tsc -b (type check) + vite build — SIEMPRE correrlo antes de deployar
+npm run lint      # eslint
+firebase deploy --only hosting --project ttchop2    # deploy de la webapp
+firebase deploy --only functions --project ttchop2  # deploy de las Cloud Functions
 ```
 
-**Notes on build pipeline**: The build runs `tsc -b` first for type checking, then `vite build` for bundling. Vite automatically handles code splitting, minification, and tree-shaking.
+`npm run build` corre `tsc -b` primero, así que cualquier error de tipos rompe el build. **Ojo**:
+`src/i18n.ts` es un objeto plano — una key que falta en un idioma compila sin problema y aparece
+como `undefined` en pantalla en tiempo de ejecución. Al agregar keys hay que agregarlas en los
+**tres** idiomas y verificarlo a mano.
 
-## Code Architecture
+## Arquitectura
 
-### Simplified Responsive Layout
+### Navegación
 
-The app uses a single-column responsive layout for consistency across all screen sizes:
-- **Main Container**: Full-width centered panel with tab navigation and views
-- **Consistent UX**: Same layout on desktop and mobile for predictable user experience
-- **Modal Overlays**: Product details, templates, and video creators show as inline panels (not overlays)
+No hay router. `main.tsx` decide por `window.location.pathname` entre tres cosas:
 
-Implemented in `App.tsx` with responsive CSS using Flexbox. All views adapt to screen size using media queries.
+| Path | Qué renderiza | Auth |
+|---|---|---|
+| `/p/:productId` | `PublicProductPage` | pública |
+| `/terms`, `/privacy` | `LegalPages` | pública (TikTok y las tiendas de extensiones las leen anónimamente — **no pueden quedar detrás del login**) |
+| todo lo demás | `AuthProvider` → `App` | requiere sesión |
 
-### Tab Navigation
+Dentro de `App.tsx` la navegación es un estado `ActiveTab` (definido en `src/types/navigation.ts`,
+fuera de `App.tsx` para evitar el import circular con `SidePanel.tsx`), y el menú es un **panel
+lateral** que sale del botón de hamburguesa — no hay bottom nav.
 
-> **Migration in progress**: see `PLAN.md` at repo root for the full "AI Video Studio" phased plan. Fase 1 (this section) is done and deployed to `https://ttchop.web.app`; Fase 2/3 are pending.
+`sessions` y `renders` son rutas internas sin item en el panel: se llega a ellas desde dentro de
+un producto.
 
-Three main tabs controlled by state in `App.tsx` (`ActiveTab = 'products' | 'templates' | 'videos'`):
-1. **Productos**: `ProductsView.tsx` / `ProductDetailModal.tsx` - Manage products with model sheets and a `videos[]` library organized by section
-2. **Templates**: `TemplatesView.tsx` / `TemplateDetailModal.tsx` - 3 sub-tabs by `type`: script, voice, ai_prompt
-3. **Videos**: contains a sub-nav (local state `videosSubTab`) between:
-   - **Video AI** (`MasterCreatorView.tsx`) - generates a clip via Seedance/Veo3 webhooks (n8n)
-   - **Edición** (`VariationsMatrixView.tsx`) - combines clips into a video (currently still the legacy B-Roll-combination flow; will become a real timeline editor in Fase 3)
+### Contenedores (separación de datos por cuenta de TikTok)
 
-### Data Flow Architecture
+Concepto central, implementado en `src/utils/containerVisibility.ts` y `ContainerContext.tsx`.
 
-**Core data models in Firestore:**
-- `products/{id}`: Product metadata, 3 model sheet images, `videos[]` clip library (recorded or ai_generated, organized by `section`)
-- `templates/{id}`: discriminated by `type` (`script` | `voice` | `ai_prompt`)
-- `master_videos/{id}`: AI-generated base videos (script + audio) with deduplication tracking
-- `video_variations/{id}`: Individual video outputs combining audio + specific clip sequences (will be replaced by `edits/{id}` in Fase 3)
+Un **contenedor** es o el general/compartido, o una cuenta de TikTok conectada (identificada por
+su `openId`). Reglas:
 
-**Key architectural pattern**: No global state management (Redux/Context). Uses:
-- Singleton `databaseService.ts` instance for CRUD operations
-- Component-level React hooks (`useState`, `useEffect`)
-- Polling mechanism in `VariationsMatrixView.tsx` (1s interval) to check Firestore for async job completion
-- Deduplication via `usedCombinations` array in master video documents (prevents duplicate clip combinations)
+- `accountId` ausente, `null` o `''` significa **contenedor general**. Los tres casos son
+  equivalentes y `isGeneralContainer()` es el único lugar donde se hace ese chequeo tri-estado.
+  Esto es lo que permitió introducir contenedores con **cero migración** de los datos existentes.
+- Conectar una cuenta de TikTok es **opcional**: todo usuario arranca en el general.
+- Hay **una sola** noción de cuenta activa. Cambiar de contenedor cambia también el destino de las
+  subidas a TikTok. No volver a introducir dos preferencias separadas.
 
-**Legacy data normalization (important)**: documents created before the Fase 1 migration still have the old field names (`bRolls` instead of `videos`, no `type` on templates). `getProducts()`/`getTemplates()` run every doc through `normalizeProduct()`/`normalizeTemplate()` (top of `databaseService.ts`) to backfill the new shape on read. **Any future field rename/restructure on a collection with real production data must add an equivalent normalization function** — renaming the TypeScript interface alone does not migrate already-stored Firestore documents, and this exact class of bug already broke production once (see `PLAN.md`).
+### Importaciones (`imports`)
 
-### Database Schema
+`analytics_orders` y `tiktok_videos` **no llevan el contenedor encima**. Cada documento apunta a
+un `imports/{id}` con su `importId`, y ese registro es el que tiene el `accountId`. Así reasignar
+una importación de 500 órdenes es **una** escritura, no 500.
 
-**Firestore Collections:**
+Documentos anteriores a esta función no tienen `importId` y resuelven directo desde su propio
+`accountId`. `getEffectiveContainer()` maneja ambos casos.
+
+### Capa de datos
+
+`databaseService.ts` es un singleton grande (~4000 líneas) con todo el CRUD. Patrones que hay que
+respetar:
+
+- **Toda query filtra por `userId`.** Es el límite de seguridad, reforzado en `firestore.rules`.
+- **`stripUndefined()` antes de escribir.** Firestore rechaza `undefined` con un error que no dice
+  qué campo fue. Esto ya rompió la creación de collages una vez.
+- **Normalización al leer.** `normalizeProduct()` / `normalizeTemplate()` migran documentos con el
+  shape viejo al leerlos. Renombrar la interfaz de TypeScript **no migra** los documentos ya
+  guardados en Firestore — este bug rompió producción una vez. Cualquier rename o reestructura de
+  un campo en una colección con datos reales necesita su función de normalización **antes** de
+  deployar.
+- **`projectId: FIREBASE_PROJECT_ID` en todo payload al servidor.** `ttchop-server` atiende a
+  `ttchop` y `ttchop2`; sin ese campo cae al default (`ttchop`) y escribe el resultado al proyecto
+  equivocado.
+
+### Endpoints externos
+
+`ttchop-server.lemonsushi.com` es el único endpoint. **No hay modos prod/test/server** — se
+eliminaron; no reintroducirlos.
+
+La excepción es `N8N_ONLY_FLOWS` en `databaseService.ts`: flujos que el servidor nunca implementó
+y siguen yendo a n8n directo. Hoy contiene `ttchop_videoMetaExtractor` (`/ai/meta`). Si se agrega
+ese endpoint al servidor, sacarlo del set.
+
+Ver `PENDIENTES-SERVIDOR.md` para los endpoints que la webapp ya llama pero el servidor todavía
+no implementa.
+
+### Cloud Functions (`functions/index.js`)
+
+`productPage` (SSR de `/p/**` para el link público), `tiktokExchange`, `tiktokAccounts`,
+`tiktokDisconnect`, `tiktokUpload`. Los tokens de TikTok viven **solo** del lado del servidor en
+`tiktok_accounts` — nunca se exponen al cliente.
+
+## Firestore
+
 ```
-products/{id}
-  ├── userId: string
-  ├── name, description: string
-  ├── modelSheetUrls: string[] (Cloud Storage URLs, max 3)
-  ├── videos: {id, name, downloadUrl, duration, section, source: 'recorded'|'ai_generated',
-  │            trimStart, trimEnd, storagePath?, createdAt}[]
-  └── createdAt: ISO timestamp
-
-templates/{id}
-  ├── userId, title, description: string
-  ├── type: 'script' | 'voice' | 'ai_prompt'
-  ├── referenceVideoUrl?: string (style reference, mainly for ai_prompt)
-  ├── voiceId?: string (ElevenLabs voice ID, only for type 'voice')
-  └── createdAt: ISO timestamp
-
-master_videos/{id}
-  ├── userId, productId, templateId: string
-  ├── scriptText: string (from Gemini)
-  ├── audioUrl: string (from ElevenLabs)
-  ├── usedCombinations: string[] (dedup tracking: ["broll_1->broll_3->broll_2"])
-  ├── variationsCount: number
-  └── createdAt: ISO timestamp
-
-video_variations/{id}
-  ├── masterVideoId, userId, productId: string
-  ├── bRollCombination: string[] (clip IDs)
-  ├── combinationKey: string (dedup hash)
-  ├── status: 'pending' | 'rendering' | 'completed' | 'failed'
-  ├── videoUrl: string | null
-  └── createdAt, updatedAt: ISO timestamp
-```
-
-**Cloud Storage**: `gs://project-bucket/users/{userId}/products/{productId}/model_sheets/` and clip videos.
-
-## File Structure
-
-```
-src/
-├── components/          # React view components
-│   ├── ProductsView.tsx (list and add products)
-│   ├── ProductDetailModal.tsx (view/edit/delete product details)
-│   ├── TemplatesView.tsx
-│   ├── MasterCreatorView.tsx
-│   ├── VariationsMatrixView.tsx
-│   └── SequencePlayer.tsx (video player with audio sync)
-├── services/
-│   └── databaseService.ts (singleton with Firestore CRUD + AI integration)
-├── config/
-│   └── firebase.ts (Firebase SDK initialization)
-├── App.tsx (main layout and tab routing)
-├── App.css
-├── index.css (global styles, CSS variables)
-├── main.tsx (React entry point)
-└── firestore.rules (security rules for Firestore)
-```
-
-## Key Implementation Details
-
-### Product Management (CRUD Operations)
-
-`ProductDetailModal.tsx` provides inline editing interface for products:
-- **View**: Click any product card to see full details (name, description, model sheets, B-rolls)
-- **Edit**: Toggle edit mode to update product information
-- **Delete**: Remove products with confirmation dialog
-- Data changes immediately persist to Firestore via `updateProduct()` and `deleteProduct()` methods
-
-### Firestore Security Rules
-
-`firestore.rules` enforces user-scoped data isolation:
-```firestore
-match /products/{document=**} {
-  allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
-  allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
-}
-```
-Applies same pattern to templates, master_videos, and video_variations. All queries are scoped by `userId` for security.
-
-### Performance Optimization: Seeding Cache
-
-`seedUserDatabase()` in databaseService uses localStorage to avoid repeated Firestore queries:
-- First load: Checks Firestore if user has existing products, creates seed data if needed, saves flag to localStorage
-- Subsequent loads: Reads from localStorage (instant), skips Firestore check
-- Survives page reloads and browser sessions for same user
-
-### AI Integration (Currently Mocked)
-
-In `databaseService.ts`:
-- `generateMasterVideo()`: Simulates Gemini Pro script generation with 2s delay
-- `startVariationGeneration()`: Simulates ElevenLabs voiceover + video composition with 5s delay
-- **TODO**: Replace mock timings with actual API calls
-
-### Video Variation Deduplication
-
-The `VariationsMatrixView` prevents algorithmic penalties by checking for duplicate B-roll combinations:
-```typescript
-const combinationKey = bRollIds.join('->'); // e.g., "broll_1->broll_3"
-if (master.usedCombinations.includes(combinationKey)) {
-  throw new Error("Combinación Duplicada!");
-}
+products/{id}              userId, name, description, region?, modelSheetUrls[], videos[], sourceUrl?, scrapedAt?, accountId?
+sessions/{id}              userId, name, productIds[], videos[], accountId?
+templates/{id}             userId, title, type: 'script'|'voice'|'ai_prompt', voiceId?   ← sin accountId: los templates son compartidos entre contenedores
+renders/{id}               userId, productId, type, status, videoUrl, tiktokVideoId?, publishedAt?, accountId?
+scheduled_renders/{id}     userId, fecha/hora programada, estado, accountId?
+master_videos/{id}         userId, productId, templateId, scriptText, audioUrl, usedCombinations[]
+video_variations/{id}      legacy del flujo viejo de combinaciones
+imports/{id}               userId, importedAt, source, accountId?   ← el contenedor vive acá
+analytics_orders/{userId}/orders/{compositeKey}    órdenes de TikTok Shop, con importId
+tiktok_videos/{id}         stats capturadas de TikTok Studio, con importId
+reports/{userId}/history/{id}
+brand_concepts/{userId}    doc único
+calendar_strategy/{userId} doc único
+user_prefs/{userId}        cuenta/contenedor activo
+tiktok_accounts/{id}       SOLO servidor: tokens de OAuth
 ```
 
-### Polling Pattern for Async Jobs
+**`analytics_orders` es una subcolección.** Consultarla como colección de nivel superior devuelve
+cero documentos aunque haya datos — la ruta real es `analytics_orders/{userId}/orders/`. Este
+error ya llevó a reportar "la base está vacía" cuando no lo estaba.
 
-`VariationsMatrixView.tsx` uses `setInterval` to poll Firestore for video rendering status:
-```typescript
-const interval = setInterval(async () => {
-  const variations = await db.getVariationsForMaster(masterId);
-  // Update UI when status changes to 'completed'
-}, 1000);
-```
+## Analytics
 
-### File Upload Handling
+`src/utils/analytics.ts` tiene toda la matemática, compartida entre `AnalyticsView` y
+`DashboardView`. `src/components/shared/AnalyticsUI.tsx` tiene los componentes visuales comunes.
 
-Files are uploaded as base64 to Firebase Storage via `databaseService.ts`:
-- Images: PNG (model sheets)
-- Videos: MP4 (B-rolls, reference videos)
-- Signed URLs stored in Firestore for retrieval
+- **Períodos**: `'d7' | 'd15' | 'd30' | 'm6' | 'all'`, ventanas **móviles** (últimos N días desde
+  ahora), no períodos de calendario. Los días salen de `PERIOD_DAYS`; agregar un período nuevo es
+  una línea en ese mapa.
+- **Default**: `'d15'` en Dashboard y en Analytics.
+- **Merge TTChop ↔ TikTok**: `Content ID` del reporte de TikTok Shop = `tiktokVideoId` del render.
+- Solo las filas con `Order settlement status = Settled` cuentan como ingreso real.
+- Las gráficas usan `preserveAspectRatio="none"` para llenar el ancho, lo que **deforma cualquier
+  forma dentro del SVG**. Texto y puntos van como overlay HTML posicionado por porcentaje, no como
+  `<text>` o `<circle>`.
 
-### Authentication
+## Extensión de Chrome
 
-`AuthView.tsx` exists with Firebase email/password auth but is **not integrated into app initialization**. Currently, no auth check before rendering main app.
+Tres content scripts con trabajos distintos (ver `extension/README.md` para instalación y uso):
 
-## Common Development Tasks
+- `content.js` — botón para importar productos en páginas de TikTok Shop. **Excluye** el dominio
+  de TikTok Studio.
+- `studio-interceptor.js` — corre en `world: "MAIN"` y parcha `fetch`/`XHR` para leer las
+  respuestas de la API interna de TikTok Studio. **Siempre llama al original primero, lee solo
+  `.clone()`, y devuelve la promesa intacta** — cualquier otra cosa rompe la página que está
+  interceptando.
+- `studio-content.js` — panel flotante con el selector de contenedor.
 
-### Adding a New View/Tab
+Las firmas anti-bot de TikTok (`msToken`, `X-Bogus`, `X-Gnarly`) **no se pueden replicar** desde
+fuera del navegador. Por eso la captura de stats es una extensión y no un scraper en el servidor.
 
-1. Create new component in `src/components/` (e.g., `NewView.tsx`)
-2. Add tab case in `App.tsx` switch statement
-3. Update tab list in `App.tsx` navigation
-4. Import databaseService for data operations
+## Deploy y caché
 
-### Adding Firebase Queries
+`firebase.json` sirve `index.html` con `no-cache` y `/assets/**` como `immutable`. **Gana la
+última regla que matchea**, por eso la de assets va al final. Si se invierte el orden, cada deploy
+deja a los usuarios con el bundle viejo.
 
-Add methods to `databaseService.ts` singleton class:
-```typescript
-async getDataByUser(userId: string) {
-  const q = query(collection(db, 'collectionName'),
-    where('userId', '==', userId));
-  return getDocs(q);
-}
-```
+Tras un deploy hay que forzar recarga (Ctrl+Shift+R) para ver los cambios.
 
-Always scope queries by `userId` for security (enforce in Firestore rules).
+## Idiomas
 
-### Handling Async Operations
+Tres: `'English' | 'Spanish (Mexico)' | 'Japanese'`, en `src/i18n.ts`, vía el hook `useT()`. Cero
+strings hardcodeados en UI nueva.
 
-Use `useEffect` in components with proper cleanup:
-```typescript
-useEffect(() => {
-  const controller = new AbortController();
-  fetchData().then(...);
-  return () => controller.abort();
-}, [dependencies]);
-```
+Deuda conocida: `SessionDetailModal.tsx` tiene strings en español hardcodeados de antes del i18n.
 
-The polling pattern in `VariationsMatrixView` is specific to async job tracking.
+## Trampas conocidas
 
-## Important Known Limitations
+1. **`analytics_orders` es subcolección** — ver arriba.
+2. **`undefined` en escrituras de Firestore** — usar `stripUndefined()`.
+3. **Renombrar campos no migra datos** — hace falta normalización al leer.
+4. **Keys de i18n faltantes no rompen el build** — se ven como `undefined` en pantalla.
+5. **Falta `projectId`** → el servidor escribe al proyecto equivocado.
+6. **Orden de las reglas de caché en `firebase.json`** — la última gana.
+7. **Formas dentro de un SVG con `preserveAspectRatio="none"`** salen deformadas.
+8. **Subir archivos**: `File.slice(0)` no copia (es una vista perezosa) y `arrayBuffer()` revienta
+   la memoria en archivos grandes. La estrategia actual depende del tamaño: ≤25MB se leen a
+   memoria, más grandes se pasan directo. Registrar el render **inmediatamente** después de subir,
+   antes de enriquecerlo — si no, un fallo en el thumbnail deja el video huérfano.
+9. **Verificar lo que reporta un subagente.** Ya pasó que uno afirmara que unos archivos "ya
+   existían" cuando los acababa de crear él mismo.
 
-1. **No Authentication Integration**: AuthView exists but app doesn't check `auth.currentUser` on startup
-2. **No Error Boundaries**: App crashes on unhandled Firebase errors
-3. **No Real Video Rendering**: `startVariationGeneration()` is simulated (no actual FFmpeg/n8n webhook)
-4. **No Real AI APIs**: Gemini and ElevenLabs calls are mocked
-5. **No Pagination**: All data loaded at once from Firestore
-6. **Spanish Hardcoded**: No i18n setup, UI text is hard-coded Spanish
-7. **No Testing**: Zero unit/integration/E2E tests
-8. **Manual Polling**: Uses interval instead of Firestore real-time listeners (cheaper but higher latency)
-9. **No Image/Video Upload in Detail Modal**: Can only view/remove existing files, not add new ones in edit mode
+## Tareas comunes
 
-## Environment Setup
+**Agregar una sección al menú**: agregar el valor a `ActiveTab` en `src/types/navigation.ts`,
+el item en `SidePanel.tsx`, el caso en el switch de `App.tsx`, y las keys de i18n en los tres
+idiomas.
 
-Create `.env.local` with Firebase configuration:
-```
-VITE_FIREBASE_API_KEY=...
-VITE_FIREBASE_AUTH_DOMAIN=...
-VITE_FIREBASE_PROJECT_ID=...
-VITE_FIREBASE_STORAGE_BUCKET=...
-VITE_FIREBASE_MESSAGING_SENDER_ID=...
-VITE_FIREBASE_APP_ID=...
-```
+**Agregar una query de Firestore**: método nuevo en `databaseService.ts`, siempre filtrando por
+`userId`, con `stripUndefined()` en las escrituras y la regla correspondiente en `firestore.rules`.
 
-Variables must be prefixed with `VITE_` to be exposed to the client.
-
-## UI/UX Details
-
-### Color System (CSS Custom Properties)
-
-```css
---bg-space: #070a13          /* Very dark background */
---primary: #6366f1           /* Indigo (buttons, primary actions) */
---secondary: #06b6d4         /* Cyan (secondary UI) */
---accent: #a855f7            /* Purple (highlights) */
---success: #10b981           /* Green (success states) */
-```
-
-### Design Patterns
-
-- **Glass Cards**: `background: rgba(17, 24, 39, 0.75)` with backdrop blur
-- **Font**: 'Outfit' for headings, 'Inter' for body (system fallback)
-- **Dark Theme Only**: No light mode support
-- **Icons**: lucide-react components (consistent visual language)
-- **Typography Smoothing**: `-webkit-font-smoothing: antialiased`
-
-## Debugging Tips
-
-- **Firestore Queries**: Check browser DevTools > Firebase tab for real-time listener activity
-- **HMR Issues**: Clear `dist/` folder and restart dev server
-- **Type Errors**: Run `npm run build` to see full TypeScript errors (ESLint doesn't catch all)
-- **Storage URLs**: Verify signed URLs in Firestore documents match Cloud Storage paths
-- **Polling Stalls**: Check browser console for Firebase errors in `VariationsMatrixView` polling loop
-
-## Performance Considerations
-
-- **Code Splitting**: Vite automatically chunks components, but large views may cause slower initial load
-- **Image Optimization**: Model sheets are base64-encoded (fine for MVP, not scalable)
-- **Firestore Reads**: All data fetched at component mount (no lazy loading)
-- **Polling Cost**: 1s interval on `VariationsMatrixView` can accumulate read costs at scale
-- **Seeding Cache**: localStorage prevents repeated Firestore queries on page reloads (key: `ttchop_seeded_{userId}`)
-- **No In-Memory Cache**: Removed per-request caching to ensure always-fresh data from Firestore
+**Agregar un período de analytics**: una entrada en `PERIOD_DAYS`, la opción en los dos
+`PeriodSelector`, y las keys de i18n.

@@ -13,6 +13,8 @@ dist-ssr
 *.local
 .env
 .env.*
+# El ejemplo no lleva valores reales y sí hace falta para levantar el proyecto.
+!.env.example
 
 # Local tooling / build cache
 .claude
