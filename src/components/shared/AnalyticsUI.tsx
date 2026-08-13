@@ -320,22 +320,36 @@ export const PeriodHistoryChart: React.FC<{
         </span>
         <span style={{ position: 'absolute', left: 0, top: `${(baselineY / VB_H) * H - 5}px`, fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1 }}>0</span>
 
-        <svg viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: H, display: 'block' }} aria-hidden="true">
-          <line x1={0} y1={PAD_TOP} x2={VB_W} y2={PAD_TOP} stroke="var(--border)" strokeWidth={1} strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
-          <line x1={0} y1={baselineY} x2={VB_W} y2={baselineY} stroke="var(--text-muted)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" opacity={0.55} />
-          <path d={path} fill="none" stroke="var(--secondary)" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-          {xy.map((q, i) => (
-            <circle
-              key={points[i].offset}
-              cx={q.x} cy={q.y}
-              r={i === n - 1 ? 3.5 : 2.5}
-              fill={i === n - 1 ? 'var(--secondary)' : 'var(--bg-space)'}
-              stroke="var(--secondary)"
-              strokeWidth={1.5}
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-        </svg>
+        <div style={{ position: 'relative', height: H }}>
+          <svg viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: H, display: 'block' }} aria-hidden="true">
+            <line x1={0} y1={PAD_TOP} x2={VB_W} y2={PAD_TOP} stroke="var(--border)" strokeWidth={1} strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
+            <line x1={0} y1={baselineY} x2={VB_W} y2={baselineY} stroke="var(--text-muted)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" opacity={0.55} />
+            <path d={path} fill="none" stroke="var(--secondary)" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+          </svg>
+
+          {/* Los puntos van como overlay HTML, no como <circle>: dentro del SVG estirado
+              (preserveAspectRatio="none") se deforman en elipses al ensanchar la pantalla. */}
+          {xy.map((q, i) => {
+            const size = i === n - 1 ? 9 : 7;
+            return (
+              <span
+                key={points[i].offset}
+                style={{
+                  position: 'absolute',
+                  left: `${(q.x / VB_W) * 100}%`,
+                  top: `${(q.y / VB_H) * H}px`,
+                  width: size, height: size,
+                  marginLeft: -size / 2, marginTop: -size / 2,
+                  borderRadius: '50%',
+                  background: i === n - 1 ? 'var(--secondary)' : 'var(--bg-space)',
+                  border: '1.5px solid var(--secondary)',
+                  boxSizing: 'border-box',
+                  pointerEvents: 'none',
+                }}
+              />
+            );
+          })}
+        </div>
 
         {/* Etiquetas del eje X: cuántos bloques atrás está cada punto. */}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.3rem' }}>
