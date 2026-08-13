@@ -42,7 +42,8 @@ const KpiCard: React.FC<{ label: string; value: string; deltaPct: number | null;
         {label}
       </span>
       <span style={{
-        fontSize: '1.2rem', fontWeight: 800, fontFamily: 'var(--font-heading)', color: 'var(--text-primary)',
+        // clamp: a 3 columnas en 375px una cifra como ¥395,659 no cabe a 1.2rem y se truncaría
+        fontSize: 'clamp(0.82rem, 3.4vw, 1.2rem)', fontWeight: 800, fontFamily: 'var(--font-heading)', color: 'var(--text-primary)',
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>
         {value}
@@ -95,8 +96,8 @@ const HighlightRow: React.FC<{ icon: React.ReactNode; label: string; primary: st
 const DashboardSkeleton: React.FC = () => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }} aria-hidden="true">
     <div className="skeleton-block" style={{ height: 36, width: '70%' }} />
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
-      {['revenue', 'gmv', 'units', 'orders'].map(key => <div key={key} className="skeleton-block" style={{ height: 70 }} />)}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem' }}>
+      {['gmv', 'revenue', 'commission-pct'].map(key => <div key={key} className="skeleton-block" style={{ height: 70 }} />)}
     </div>
     <div className="skeleton-block" style={{ height: 180 }} />
     <div className="skeleton-block" style={{ height: 140 }} />
@@ -298,7 +299,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
               {/* Las tres métricas de dinero primero: GMV, comisión, y qué porcentaje del GMV
                   representa esa comisión. El porcentaje se calcula con los dos números de arriba
                   para que cuadre si el usuario los divide a mano. */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem' }}>
                 <KpiCard
                   label={t.analytics_metric_gmv}
                   value={formatCurrency(currentMetrics.gmvTotal, selectedCurrency)}
@@ -336,7 +337,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
               </SectionCard>
 
               {/* El resto de las métricas */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem' }}>
                 <KpiCard
                   label={t.analytics_metric_units}
                   value={currentMetrics.unitsSold.toLocaleString()}
