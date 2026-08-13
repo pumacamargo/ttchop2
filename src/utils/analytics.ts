@@ -624,3 +624,65 @@ export function templateNameResolver(templates: { id: string; title: string }[])
   const byId = new Map(templates.map(t => [t.id, t.title]));
   return (id: string | undefined): string | undefined => id ? (byId.get(id) ?? id) : undefined;
 }
+
+/** Un bloque completo del período (7d, 30d o 6 meses) agregado a un solo punto. */
+export interface PeriodHistoryPoint {
+  /** 0 = período actual, 1 = el inmediatamente anterior, 2 = el de antes, etc. */
+  offset: number;
+  start: Date;
+  end: Date;
+  unitsSold: number;
+}
+
+/** Cuántos bloques hacia atrás mostramos como máximo: más que esto se vuelve ilegible en móvil. */
+const MAX_HISTORY_BLOCKS = 8;
+
+/**
+ * Serie histórica de bloques del tamaño del período: cada punto es UN período completo,
+ * no un día dentro de él. El punto de la derecha es el período en curso, el anterior son
+ * los 7 (o 30 días / 6 meses) previos, y así hacia atrás. Sirve para ver la tendencia
+ * de período a período, que es lo que dos totales sueltos no dicen.
+ *
+ * Null para 'all': el máximo histórico es un solo bloque, no hay tendencia que trazar.
+ */
+export function buildPeriodHistory(
+  orders: AnalyticsOrder[],
+  period: Period,
+  now: Date = new Date()
+): PeriodHistoryPoint[] | null {
+  if (period === 'all') return null;
+
+  // Cada bloque se calcula con la misma aritmética que el selector de período, para que
+  // el bloque de la derecha coincida exactamente con lo que muestran las tarjetas de arriba.
+  const blockStart = (blocksBack: number): Date =>
+    period === 'm6' ? shiftMonths(now, -6 * (blocksBack + 1))
+      : shiftDays(now, -(period === 'd7' ? 7 : 30) * (blocksBack + 1));
+
+  const dated = orders.filter(o => o.orderDate !== null);
+  if (dated.length === 0) return null;
+  const earliest = Math.min(...dated.map(o => new Date(o.orderDate as string).getTime()));
+
+  // Solo retrocedemos hasta donde hay datos: bloques vacíos anteriores a la primera venta
+  // aplanarían la gráfica sin aportar nada.
+  let blocks = 1;
+  while (blocks < MAX_HISTORY_BLOCKS && blockStart(blocks - 1).getTime() > earliest) blocks++;
+
+  const points: PeriodHistoryPoint[] = Array.from({ length: blocks }, (_, i) => ({
+    offset: i,
+    start: blockStart(i),
+    end: i === 0 ? now : blockStart(i - 1),
+    unitsSold: 0,
+  }));
+
+  dated.forEach(o => {
+    const t = new Date(o.orderDate as string).getTime();
+    const hit = points.find(p => t >= p.start.getTime() && t < p.end.getTime());
+    if (hit) hit.unitsSold += o.itemsSold;
+  });
+
+  // Un solo bloque no es una tendencia: no hay nada contra qué comparar, así que no se dibuja.
+  if (points.length < 2) return null;
+
+  // Devolvemos de más antiguo a más reciente: el eje X avanza en el tiempo como se lee.
+  return points.reverse();
+}

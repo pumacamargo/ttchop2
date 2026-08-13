@@ -2,7 +2,7 @@
 // the same shape of data (currency amounts, category bars, settlement splits) and should look
 // like one system rather than two hand-rolled copies.
 import React, { useRef, useState } from 'react';
-import type { DailyPerformanceBucket, BucketGranularity } from '../../utils/analytics';
+import type { DailyPerformanceBucket, BucketGranularity, PeriodHistoryPoint } from '../../utils/analytics';
 import { formatBucketLabel } from '../../utils/analytics';
 
 export const SectionCard: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
@@ -250,6 +250,110 @@ export const DailyPerformanceChart: React.FC<{
             {' · '}<span style={{ color: 'var(--accent)' }}>{videosLabel}: {hovered.videoCount}</span>
           </div>
         )}
+      </div>
+    </div>
+  );
+};
+
+// ── Historial por bloques de período ────────────────────────────────────────
+// Una sola línea donde cada punto es UN período completo agregado: el de la derecha es el
+// período en curso, el de su izquierda son los 7 días (o 30 días / 6 meses) previos, y así
+// hacia atrás. Puntos marcados para que cada bloque se lea como un valor discreto, no como
+// una curva continua — porque eso es lo que son.
+export const PeriodHistoryChart: React.FC<{
+  points: PeriodHistoryPoint[];
+  blockLabel: string;
+  currentLabel: string;
+  deltaLabel: string;
+  emptyText: string;
+}> = ({ points, blockLabel, currentLabel, deltaLabel, emptyText }) => {
+  if (points.length === 0 || points.every(p => p.unitsSold === 0)) {
+    return <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0 }}>{emptyText}</p>;
+  }
+
+  const H = 140;
+  const VB_W = 100;
+  const VB_H = 340;
+  const PAD_TOP = 20;
+  const PAD_BOTTOM = 20;
+  const n = points.length;
+  const usableH = VB_H - PAD_TOP - PAD_BOTTOM;
+  const maxVal = Math.max(1, ...points.map(p => p.unitsSold));
+  const baselineY = VB_H - PAD_BOTTOM;
+
+  const xy = points.map((p, i) => ({
+    x: n === 1 ? VB_W / 2 : (i / (n - 1)) * VB_W,
+    y: PAD_TOP + usableH - (p.unitsSold / maxVal) * usableH,
+  }));
+  const path = xy.map((q, i) => `${i === 0 ? 'M' : 'L'} ${q.x.toFixed(2)},${q.y.toFixed(2)}`).join(' ');
+
+  const current = points[n - 1];
+  const previous = n > 1 ? points[n - 2] : null;
+  const deltaPct = previous && previous.unitsSold > 0
+    ? ((current.unitsSold - previous.unitsSold) / previous.unitsSold) * 100
+    : null;
+  const deltaColor = deltaPct === null ? 'var(--text-muted)'
+    : deltaPct >= 0 ? 'var(--success)' : 'var(--danger)';
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.55rem' }}>
+        <span style={{ fontSize: '1.15rem', fontWeight: 800, fontFamily: 'var(--font-heading)', color: 'var(--text-primary)' }}>
+          {current.unitsSold.toLocaleString()}
+        </span>
+        {deltaPct !== null && (
+          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: deltaColor }}>
+            {deltaPct >= 0 ? '+' : ''}{deltaPct.toFixed(1)}%
+          </span>
+        )}
+        {previous && (
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            {deltaLabel} ({previous.unitsSold.toLocaleString()})
+          </span>
+        )}
+      </div>
+
+      <div style={{ position: 'relative', paddingLeft: '1.7rem' }}>
+        {/* Escala como overlay HTML: el SVG usa preserveAspectRatio="none" y deformaría el texto. */}
+        <span style={{ position: 'absolute', left: 0, top: `${(PAD_TOP / VB_H) * H - 6}px`, fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1 }}>
+          {maxVal.toLocaleString()}
+        </span>
+        <span style={{ position: 'absolute', left: 0, top: `${(baselineY / VB_H) * H - 5}px`, fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: 1 }}>0</span>
+
+        <svg viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="none" style={{ width: '100%', height: H, display: 'block' }} aria-hidden="true">
+          <line x1={0} y1={PAD_TOP} x2={VB_W} y2={PAD_TOP} stroke="var(--border)" strokeWidth={1} strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
+          <line x1={0} y1={baselineY} x2={VB_W} y2={baselineY} stroke="var(--text-muted)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" opacity={0.55} />
+          <path d={path} fill="none" stroke="var(--secondary)" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+          {xy.map((q, i) => (
+            <circle
+              key={points[i].offset}
+              cx={q.x} cy={q.y}
+              r={i === n - 1 ? 3.5 : 2.5}
+              fill={i === n - 1 ? 'var(--secondary)' : 'var(--bg-space)'}
+              stroke="var(--secondary)"
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+        </svg>
+
+        {/* Etiquetas del eje X: cuántos bloques atrás está cada punto. */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.3rem' }}>
+          {points.map((p, i) => (
+            <span
+              key={p.offset}
+              style={{
+                fontSize: '0.58rem', lineHeight: 1,
+                color: i === n - 1 ? 'var(--secondary)' : 'var(--text-muted)',
+                fontWeight: i === n - 1 ? 700 : 500,
+                textAlign: 'center', flex: 1, minWidth: 0,
+              }}
+            >
+              {i === n - 1 ? currentLabel : `-${p.offset}`}
+            </span>
+          ))}
+        </div>
+        <p style={{ margin: '0.35rem 0 0', fontSize: '0.62rem', color: 'var(--text-muted)' }}>{blockLabel}</p>
       </div>
     </div>
   );

@@ -17,11 +17,11 @@ import {
   type Period,
   filterByPeriod, filterByDateRange, filterRendersByPeriod, getPreviousPeriodRange,
   formatCurrency, computeOrderMetrics, computeDelta, aggregateByProduct, buildVideoRevenue,
-  buildTopTemplate, buildDailyPerformanceBuckets, computeCommissionRate,
+  buildTopTemplate, buildDailyPerformanceBuckets, computeCommissionRate, buildPeriodHistory,
   templateNameResolver, filterVideoStatsByPeriod, filterVideoStatsByDateRange, computeVideoStatsMetrics,
 } from '../utils/analytics';
 import { useCurrencySelection } from '../hooks/useCurrencySelection';
-import { SectionCard, PeriodSelector, CurrencySelector, DailyPerformanceChart } from './shared/AnalyticsUI';
+import { SectionCard, PeriodSelector, CurrencySelector, DailyPerformanceChart, PeriodHistoryChart } from './shared/AnalyticsUI';
 
 // ── KPI card with period-over-period delta ──────────────────────────────────
 
@@ -204,6 +204,8 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   const viewsDelta = previousVideoStats.length > 0 ? computeDelta(currentViewsMetrics.totalViews, previousViewsMetrics.totalViews) : null;
 
   // Unidades vendidas y videos publicados por día — ambos conteos, una sola escala.
+  // Tendencia bloque a bloque: cada punto es un período completo. Null en 'Máximo'.
+  const history = useMemo(() => buildPeriodHistory(currencyOrders, period, now), [currencyOrders, period, now]);
   const { granularity: dailyPerfGranularity, buckets: dailyPerfBuckets } = useMemo(
     () => buildDailyPerformanceBuckets(currencyOrders, videoStats, period, now),
     [currencyOrders, videoStats, period, now]
@@ -357,6 +359,23 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                   comparisonLabel={comparisonLabel}
                 />
               </div>
+
+              {/* Tendencia período a período. No aplica en 'Máximo'. */}
+              {history && (
+                <SectionCard title={t.dashboard_history_title}>
+                  <PeriodHistoryChart
+                    points={history}
+                    blockLabel={
+                      period === 'd7' ? t.dashboard_history_block_d7
+                        : period === 'd30' ? t.dashboard_history_block_d30
+                          : t.dashboard_history_block_m6
+                    }
+                    currentLabel={t.dashboard_history_current}
+                    deltaLabel={t.dashboard_history_previous}
+                    emptyText={t.dashboard_history_empty}
+                  />
+                </SectionCard>
+              )}
 
               {/* Highlights */}
               <SectionCard title={t.dashboard_highlights_title}>
