@@ -109,6 +109,7 @@ const DashboardSkeleton: React.FC = () => (
 
 const PERIOD_COMPARISON_KEY: Record<Period, keyof Translations | null> = {
   d7: 'dashboard_vs_previous_d7',
+  d15: 'dashboard_vs_previous_d15',
   d30: 'dashboard_vs_previous_d30',
   m6: 'dashboard_vs_previous_m6',
   all: null,
@@ -125,7 +126,8 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [period, setPeriod] = useState<Period>('all');
+  // 15 días es la ventana de trabajo por defecto: suficiente para ver tendencia sin diluirla.
+  const [period, setPeriod] = useState<Period>('d15');
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -274,6 +276,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
             onChange={p => setPeriod(p as Period)}
             options={[
               { key: 'd7', label: t.analytics_period_d7 },
+              { key: 'd15', label: t.analytics_period_d15 },
               { key: 'd30', label: t.analytics_period_d30 },
               { key: 'm6', label: t.analytics_period_m6 },
               { key: 'all', label: t.analytics_period_all },
@@ -327,16 +330,23 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                 />
               </div>
 
-              {/* Gráfica diaria: unidades vendidas y videos publicados */}
-              <SectionCard title={t.analytics_daily_chart_title}>
-                <DailyPerformanceChart
-                  buckets={dailyPerfBuckets}
-                  granularity={dailyPerfGranularity}
-                  emptyText={t.analytics_daily_chart_empty}
-                  unitsLabel={t.analytics_metric_units}
-                  videosLabel={t.analytics_video_metric_published}
-                />
-              </SectionCard>
+              {/* Tendencia período a período. No aplica en 'Máximo'. */}
+              {history && (
+                <SectionCard title={t.dashboard_history_title}>
+                  <PeriodHistoryChart
+                    points={history}
+                    blockLabel={
+                      period === 'd7' ? t.dashboard_history_block_d7
+                        : period === 'd15' ? t.dashboard_history_block_d15
+                        : period === 'd30' ? t.dashboard_history_block_d30
+                          : t.dashboard_history_block_m6
+                    }
+                    currentLabel={t.dashboard_history_current}
+                    deltaLabel={t.dashboard_history_previous}
+                    emptyText={t.dashboard_history_empty}
+                  />
+                </SectionCard>
+              )}
 
               {/* El resto de las métricas */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem' }}>
@@ -360,22 +370,16 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
                 />
               </div>
 
-              {/* Tendencia período a período. No aplica en 'Máximo'. */}
-              {history && (
-                <SectionCard title={t.dashboard_history_title}>
-                  <PeriodHistoryChart
-                    points={history}
-                    blockLabel={
-                      period === 'd7' ? t.dashboard_history_block_d7
-                        : period === 'd30' ? t.dashboard_history_block_d30
-                          : t.dashboard_history_block_m6
-                    }
-                    currentLabel={t.dashboard_history_current}
-                    deltaLabel={t.dashboard_history_previous}
-                    emptyText={t.dashboard_history_empty}
-                  />
-                </SectionCard>
-              )}
+              {/* Gráfica diaria: unidades vendidas y videos publicados */}
+              <SectionCard title={t.analytics_daily_chart_title}>
+                <DailyPerformanceChart
+                  buckets={dailyPerfBuckets}
+                  granularity={dailyPerfGranularity}
+                  emptyText={t.analytics_daily_chart_empty}
+                  unitsLabel={t.analytics_metric_units}
+                  videosLabel={t.analytics_video_metric_published}
+                />
+              </SectionCard>
 
               {/* Highlights */}
               <SectionCard title={t.dashboard_highlights_title}>

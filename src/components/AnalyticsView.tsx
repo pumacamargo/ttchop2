@@ -190,7 +190,8 @@ export const AnalyticsView: React.FC = () => {
   const [loadError, setLoadError] = useState('');
   const [showManageImports, setShowManageImports] = useState(false);
 
-  const [period, setPeriod] = useState<Period>('all');
+  // 15 días es la ventana de trabajo por defecto: suficiente para ver tendencia sin diluirla.
+  const [period, setPeriod] = useState<Period>('d15');
   const [videoSortKey, setVideoSortKey] = useState<VideoSortKey>('views');
   const [videoSortDir, setVideoSortDir] = useState<'asc' | 'desc'>('desc');
   // Filters the whole publishing-performance section by captured TikTok handle. Derived purely
@@ -548,6 +549,7 @@ export const AnalyticsView: React.FC = () => {
             onChange={p => setPeriod(p as Period)}
             options={[
               { key: 'd7', label: t.analytics_period_d7 },
+              { key: 'd15', label: t.analytics_period_d15 },
               { key: 'd30', label: t.analytics_period_d30 },
               { key: 'm6', label: t.analytics_period_m6 },
               { key: 'all', label: t.analytics_period_all },

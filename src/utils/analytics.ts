@@ -4,7 +4,7 @@
 // that touches that math lives here once instead of being reimplemented per view.
 import type { AnalyticsOrder, Render, TikTokVideoStats } from '../services/databaseService';
 
-export type Period = 'd7' | 'd30' | 'm6' | 'all';
+export type Period = 'd7' | 'd15' | 'd30' | 'm6' | 'all';
 
 // ── Date helpers (period filtering) ─────────────────────────────────────────
 //
@@ -17,7 +17,7 @@ export type Period = 'd7' | 'd30' | 'm6' | 'all';
 // offset del usuario y movería órdenes de un período a otro.
 
 /** Cuántos días abarca la ventana. Null para 'm6', que se mide en meses, y para 'all'. */
-const PERIOD_DAYS: Partial<Record<Period, number>> = { d7: 7, d30: 30 };
+const PERIOD_DAYS: Partial<Record<Period, number>> = { d7: 7, d15: 15, d30: 30 };
 
 function shiftDays(d: Date, days: number): Date {
   return new Date(d.getTime() + days * 86_400_000);
@@ -451,7 +451,7 @@ function resolveBucketWindowStart(period: Period, now: Date, sourceDates: Date[]
 
 /**
  * Granularidad de bucket, decidida por el LAPSO REAL de los datos a graficar — no por el
- * nombre del período. 'd7'/'d30' siempre caen en día (7/30 < 120) y 'm6' siempre en mes
+ * nombre del período. 'd7'/'d15'/'d30' siempre caen en día (< 120) y 'm6' siempre en mes
  * (~183 >= 120), igual que antes; lo que cambia es 'all': con unos pocos meses de historia (el
  * caso común hoy) da día en vez de forzar mes y aplastar el gráfico a un puñado de barras, y
  * con años de historia sigue degradando a mes solo. `sourceDates` son las fechas de lo que se
@@ -656,7 +656,7 @@ export function buildPeriodHistory(
   // el bloque de la derecha coincida exactamente con lo que muestran las tarjetas de arriba.
   const blockStart = (blocksBack: number): Date =>
     period === 'm6' ? shiftMonths(now, -6 * (blocksBack + 1))
-      : shiftDays(now, -(period === 'd7' ? 7 : 30) * (blocksBack + 1));
+      : shiftDays(now, -(PERIOD_DAYS[period] ?? 30) * (blocksBack + 1));
 
   const dated = orders.filter(o => o.orderDate !== null);
   if (dated.length === 0) return null;
