@@ -285,11 +285,8 @@ h1, h2, h3, h4, h5 {
   font-weight: 800;
   letter-spacing: -0.02em;
   margin: 0;
-  background: var(--gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  /* Blanco, como el wordmark del logo de la marca — sin el degradado de antes. */
+  color: #fff;
 }
 
 /* Active container indicator + switcher, sits between the logo and the nav items */
