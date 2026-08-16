@@ -87,21 +87,16 @@ export const AuthView: React.FC = () => {
         <img
           src="/icon-512.png"
           alt="TTChop2"
-          width={72}
-          height={72}
+          width={96}
+          height={96}
           style={{
-            width: '72px', height: '72px', borderRadius: '18px',
+            width: '96px', height: '96px', borderRadius: '22px',
             display: 'block', margin: '0 auto 1.25rem',
             border: '1px solid rgba(255,255,255,0.08)',
             boxShadow: '0 4px 24px rgba(109,59,215,0.4)'
           }}
         />
-        <h2 style={{
-          fontSize: '2rem', marginBottom: '0.25rem', fontFamily: 'var(--font-heading)',
-          fontWeight: 800, letterSpacing: '-0.02em',
-          background: 'var(--gradient)',
-          WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text'
-        }}>TTChop</h2>
+        {/* Sin wordmark de texto: el nombre ya va dentro del icono. */}
         <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
           Automate your marketing content at scale
         </p>
