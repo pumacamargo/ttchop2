@@ -266,17 +266,17 @@ h1, h2, h3, h4, h5 {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: var(--primary-glow);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
 
-.side-panel-logo-badge span {
-  color: var(--primary);
-  font-weight: 800;
-  font-size: 0.9rem;
+.side-panel-logo-badge img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .side-panel-wordmark {

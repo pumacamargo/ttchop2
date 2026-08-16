@@ -56,7 +56,7 @@ export const PublicProductPage: React.FC<{ productId: string }> = ({ productId }
       <div style={styles.card}>
         {/* Header */}
         <div style={styles.header}>
-          <div style={styles.logo}>TT</div>
+          <img src="/logo/logo-mark.png" alt="TTChop" style={styles.logo} />
           <span style={styles.logoText}>TTChop</span>
         </div>
 
@@ -122,16 +122,11 @@ const styles: Record<string, React.CSSProperties> = {
     paddingBottom: '1rem',
   },
   logo: {
-    background: 'rgba(99,102,241,0.25)',
     width: '32px',
     height: '32px',
-    borderRadius: '8px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: '#6366f1',
-    fontWeight: 800,
-    fontSize: '1rem',
+    objectFit: 'contain',
+    display: 'block',
+    flexShrink: 0,
   },
   logoText: {
     color: '#f3f4f6',

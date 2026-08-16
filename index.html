@@ -2,9 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Mismo icono que se publica en TikTok (public/logo/logo.jpeg). El .ico es ese mismo
+         arte recortado al contenido para que se lea a 16-32px en la pestaña. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#050507" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ttchop</title>
+    <meta property="og:title" content="TTChop2" />
+    <meta property="og:image" content="https://ttchop2.web.app/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <div id="root"></div>

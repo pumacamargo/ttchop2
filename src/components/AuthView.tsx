@@ -5,7 +5,7 @@ import {
   createUserWithEmailAndPassword, 
   sendPasswordResetEmail 
 } from 'firebase/auth';
-import { Mail, Lock, ShieldAlert, Sparkles, UserPlus, LogIn, KeyRound } from 'lucide-react';
+import { Mail, Lock, ShieldAlert, UserPlus, LogIn, KeyRound } from 'lucide-react';
 
 export const AuthView: React.FC = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -83,15 +83,19 @@ export const AuthView: React.FC = () => {
     }}>
       {/* App Branding */}
       <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-        <div style={{
-          background: 'var(--gradient)',
-          width: '60px', height: '60px', borderRadius: '18px',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          margin: '0 auto 1.25rem',
-          boxShadow: '0 4px 24px rgba(109,59,215,0.4)'
-        }}>
-          <Sparkles size={28} color="#fff" />
-        </div>
+        {/* Mismo icono que la app de TikTok y que el favicon — TikTok revisa que coincidan. */}
+        <img
+          src="/icon-512.png"
+          alt="TTChop2"
+          width={72}
+          height={72}
+          style={{
+            width: '72px', height: '72px', borderRadius: '18px',
+            display: 'block', margin: '0 auto 1.25rem',
+            border: '1px solid rgba(255,255,255,0.08)',
+            boxShadow: '0 4px 24px rgba(109,59,215,0.4)'
+          }}
+        />
         <h2 style={{
           fontSize: '2rem', marginBottom: '0.25rem', fontFamily: 'var(--font-heading)',
           fontWeight: 800, letterSpacing: '-0.02em',

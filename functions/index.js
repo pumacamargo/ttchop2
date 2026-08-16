@@ -279,12 +279,20 @@ exports.productPage = functions.https.onRequest(async (req, res) => {
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>${esc(p.name)} — TTChop</title>
   <meta name="description" content="${esc(p.description || p.name)}">
+  <!-- Mismo icono que la app de TikTok y que el resto del sitio. -->
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#050507">
+  <meta property="og:title" content="${esc(p.name)} — TTChop">
+  <meta property="og:image" content="https://ttchop2.web.app/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#0b0f19;color:#f3f4f6;font-family:'Inter',system-ui,sans-serif;padding:2rem 1rem;min-height:100vh}
     .card{max-width:680px;margin:0 auto;background:rgba(17,24,39,0.9);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:1.75rem;display:flex;flex-direction:column;gap:1.5rem}
     .header{display:flex;align-items:center;gap:.5rem;border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:1rem}
-    .logo{background:rgba(99,102,241,0.25);width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#6366f1;font-weight:800;font-size:1rem;flex-shrink:0}
+    .logo{width:32px;height:32px;object-fit:contain;display:block;flex-shrink:0}
     .region{display:inline-block;font-size:.7rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#06b6d4;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.25);border-radius:4px;padding:2px 8px}
     h1{font-size:1.5rem;font-weight:700;line-height:1.3;color:#f3f4f6}
     p.desc{color:#9ca3af;font-size:.9rem;line-height:1.6;white-space:pre-wrap}
@@ -295,7 +303,7 @@ exports.productPage = functions.https.onRequest(async (req, res) => {
 <body>
   <div class="card">
     <div class="header">
-      <div class="logo">TT</div>
+      <img class="logo" src="/logo/logo-mark.png" alt="TTChop">
       <span style="color:#f3f4f6;font-weight:700;font-size:1rem">TTChop</span>
     </div>
     <div>

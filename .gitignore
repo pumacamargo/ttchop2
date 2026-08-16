@@ -30,3 +30,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Basura de Windows
+Thumbs.db
+ehthumbs.db
