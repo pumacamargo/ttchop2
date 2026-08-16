@@ -98,7 +98,6 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, activeTab
           <div className="side-panel-logo-badge">
             <img src="/logo/logo-mark.png" alt="TTChop2" />
           </div>
-          <h1 className="side-panel-wordmark">TTChop2</h1>
         </div>
 
         <ContainerSwitcher />
