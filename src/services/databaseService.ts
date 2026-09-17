@@ -320,6 +320,16 @@ export interface BrandFont {
   storagePath?: string;
 }
 
+// Recurring animated reaction character (mascot) raw asset library — each item is one
+// image or short video clip tagged with an emotion, for the (separately-built) runtime
+// video logic to pick from when syncing to emotion tags in the voiceover script.
+export interface MascotAsset {
+  emotion: string;
+  url: string;
+  storagePath: string;
+  type: 'image' | 'video';
+}
+
 export interface BrandConcept {
   description: string;
   niche: string;
@@ -327,6 +337,7 @@ export interface BrandConcept {
   colors: string[];
   fonts: BrandFont[];
   imageUrls: string[];
+  mascotAssets?: MascotAsset[];
   // Container this brand concept lives in — absent/undefined = general, see Product.accountId.
   accountId?: string;
   updatedAt: string; // ISO
@@ -3901,6 +3912,33 @@ class DatabaseService {
       }
     }
     await updateDoc(doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)), { fonts: arrayRemove(font), updatedAt: new Date().toISOString() });
+  }
+
+  async uploadMascotAsset(file: File, emotion: string, accountId?: string): Promise<MascotAsset> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    const path = `users/${user.uid}/brand/mascot/${emotion}_${Date.now()}_${file.name}`;
+    const fileRef = ref(storage, path);
+    await uploadBytes(fileRef, file);
+    const url = await getDownloadURL(fileRef);
+    const asset: MascotAsset = { emotion, url, storagePath: path, type: file.type.startsWith('image/') ? 'image' : 'video' };
+    await setDoc(
+      doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)),
+      { mascotAssets: arrayUnion(asset), ...(accountId && { accountId }), updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+    return asset;
+  }
+
+  async deleteMascotAsset(asset: MascotAsset, accountId?: string): Promise<void> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    try {
+      await deleteObject(ref(storage, asset.storagePath));
+    } catch (err) {
+      console.error(err);
+    }
+    await updateDoc(doc(firestore, 'brand_concepts', containerDocId(user.uid, accountId)), { mascotAssets: arrayRemove(asset), updatedAt: new Date().toISOString() });
   }
 
   // ── Reports ────────────────────────────────────────────────────────────────

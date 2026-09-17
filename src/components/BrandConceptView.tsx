@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Palette, RefreshCw, AlertTriangle, Save, CheckCircle2, Copy, Trash2, Upload,
-  Image as ImageIcon, Type as FontIcon, X,
+  Image as ImageIcon, Type as FontIcon, X, Smile,
 } from 'lucide-react';
 import { db } from '../services/databaseService';
-import type { BrandFont } from '../services/databaseService';
+import type { BrandFont, MascotAsset } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
 import type { Translations } from '../i18n';
 
 const HEX_COLOR_RE = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 const FONT_EXTENSIONS = ['.ttf', '.woff', '.woff2'];
+const MASCOT_EMOTIONS = ['happy', 'excited', 'surprised', 'sarcastic', 'annoyed', 'sighs', 'laughs', 'curious'];
+const MASCOT_CUSTOM_EMOTION = '__custom__';
 
 interface QueueItem {
   id: string;
@@ -21,6 +23,10 @@ interface QueueItem {
 
 function fontKey(font: BrandFont): string {
   return font.storagePath ?? font.url ?? font.name;
+}
+
+function mascotKey(asset: MascotAsset): string {
+  return asset.storagePath ?? asset.url;
 }
 
 // ── Small presentational pieces ──────────────────────────────────────────────
@@ -109,6 +115,7 @@ export const BrandConceptView: React.FC = () => {
   const [colors, setColors] = useState<string[]>([]);
   const [fonts, setFonts] = useState<BrandFont[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [mascotAssets, setMascotAssets] = useState<MascotAsset[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -127,8 +134,15 @@ export const BrandConceptView: React.FC = () => {
   const [fontActionError, setFontActionError] = useState('');
   const [confirmDeleteFont, setConfirmDeleteFont] = useState<BrandFont | null>(null);
 
+  const [mascotQueue, setMascotQueue] = useState<QueueItem[]>([]);
+  const [mascotActionError, setMascotActionError] = useState('');
+  const [confirmDeleteMascot, setConfirmDeleteMascot] = useState<MascotAsset | null>(null);
+  const [mascotEmotion, setMascotEmotion] = useState<string>(MASCOT_EMOTIONS[0]);
+  const [mascotCustomEmotion, setMascotCustomEmotion] = useState('');
+
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fontInputRef = useRef<HTMLInputElement>(null);
+  const mascotInputRef = useRef<HTMLInputElement>(null);
 
   // Brand concept is one doc PER CONTAINER (see containerDocId() in databaseService.ts) — switching
   // containers points at a different doc entirely, so this has to re-fetch on activeAccountId change.
@@ -143,6 +157,7 @@ export const BrandConceptView: React.FC = () => {
       setColors(data?.colors ?? []);
       setFonts(data?.fonts ?? []);
       setImageUrls(data?.imageUrls ?? []);
+      setMascotAssets(data?.mascotAssets ?? []);
       setUpdatedAt(data?.updatedAt ?? null);
     } catch (err) {
       console.error(err);
@@ -268,6 +283,39 @@ export const BrandConceptView: React.FC = () => {
       setFontActionError(t.brand_font_delete_error);
     } finally {
       setConfirmDeleteFont(null);
+    }
+  };
+
+  // ── Mascot assets ────────────────────────────────────────────────────────
+  const handleMascotFilesSelected = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const emotion = (mascotEmotion === MASCOT_CUSTOM_EMOTION ? mascotCustomEmotion : mascotEmotion).trim();
+    if (!emotion) return;
+    setMascotActionError('');
+    for (const file of Array.from(files)) {
+      const qid = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      setMascotQueue(prev => [...prev, { id: qid, name: file.name, status: 'uploading' }]);
+      try {
+        const asset = await db.uploadMascotAsset(file, emotion, activeAccountId ?? undefined);
+        setMascotAssets(prev => [...prev, asset]);
+        setMascotQueue(prev => prev.map(item => item.id === qid ? { ...item, status: 'done' } : item));
+      } catch (err) {
+        console.error(err);
+        setMascotQueue(prev => prev.map(item => item.id === qid ? { ...item, status: 'error', error: `${file.name}: ${t.brand_mascot_upload_error}` } : item));
+      }
+    }
+  };
+
+  const handleDeleteMascot = async (asset: MascotAsset) => {
+    setMascotActionError('');
+    try {
+      await db.deleteMascotAsset(asset, activeAccountId ?? undefined);
+      setMascotAssets(prev => prev.filter(a => mascotKey(a) !== mascotKey(asset)));
+    } catch (err) {
+      console.error(err);
+      setMascotActionError(t.brand_mascot_delete_error);
+    } finally {
+      setConfirmDeleteMascot(null);
     }
   };
 
@@ -515,6 +563,97 @@ export const BrandConceptView: React.FC = () => {
             <UploadQueueList items={fontQueue} onDismiss={id => setFontQueue(prev => prev.filter(i => i.id !== id))} />
             {fontActionError && <span style={{ fontSize: '0.75rem', color: 'var(--danger)' }}>{fontActionError}</span>}
           </SectionCard>
+
+          {/* ── Mascot ───────────────────────────────────────────────────── */}
+          <SectionCard title={t.brand_mascot_title} icon={<Smile size={15} style={{ color: 'var(--primary)' }} />}>
+            <p style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', margin: 0 }}>{t.brand_mascot_hint}</p>
+
+            <input
+              ref={mascotInputRef}
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              style={{ display: 'none' }}
+              onChange={e => { handleMascotFilesSelected(e.target.files); e.target.value = ''; }}
+            />
+
+            {mascotAssets.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '1.25rem 0.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem' }}>
+                <Smile size={28} style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: 600 }}>{t.brand_mascot_empty}</span>
+                <span style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>{t.brand_mascot_empty_hint}</span>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(84px, 1fr))', gap: '0.5rem' }}>
+                {mascotAssets.map(asset => (
+                  <div key={mascotKey(asset)} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                    <div style={{ position: 'relative', aspectRatio: '1', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', background: 'var(--bg-input)' }}>
+                      {asset.type === 'image' ? (
+                        <img src={asset.url} alt={asset.emotion} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                      ) : (
+                        <video src={asset.url} muted style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                      )}
+                      <button
+                        onClick={() => setConfirmDeleteMascot(asset)}
+                        aria-label={t.delete}
+                        style={{
+                          position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.6)', border: 'none',
+                          borderRadius: 6, width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: 'var(--text-primary)', cursor: 'pointer',
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                    <span style={{
+                      fontSize: '0.68rem', color: 'var(--text-secondary)', textAlign: 'center',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {asset.emotion}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                <label style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.brand_mascot_emotion_label}</label>
+                <select
+                  className="form-input"
+                  value={mascotEmotion}
+                  onChange={e => setMascotEmotion(e.target.value)}
+                  style={{ fontSize: '0.82rem', minHeight: '44px' }}
+                >
+                  {MASCOT_EMOTIONS.map(emotion => (
+                    <option key={emotion} value={emotion}>{emotion}</option>
+                  ))}
+                  <option value={MASCOT_CUSTOM_EMOTION}>{t.brand_mascot_emotion_custom_ph}</option>
+                </select>
+              </div>
+              {mascotEmotion === MASCOT_CUSTOM_EMOTION && (
+                <input
+                  className="form-input"
+                  value={mascotCustomEmotion}
+                  onChange={e => setMascotCustomEmotion(e.target.value)}
+                  placeholder={t.brand_mascot_emotion_custom_ph}
+                  style={{ fontSize: '0.82rem', width: '160px' }}
+                />
+              )}
+            </div>
+
+            <button
+              onClick={() => mascotInputRef.current?.click()}
+              disabled={mascotEmotion === MASCOT_CUSTOM_EMOTION && !mascotCustomEmotion.trim()}
+              className="btn btn-secondary"
+              style={{ width: 'auto', alignSelf: 'flex-start', minHeight: '44px', padding: '0 1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <Upload size={14} /> {t.brand_mascot_upload}
+            </button>
+
+            <UploadQueueList items={mascotQueue} onDismiss={id => setMascotQueue(prev => prev.filter(i => i.id !== id))} />
+            {mascotActionError && <span style={{ fontSize: '0.75rem', color: 'var(--danger)' }}>{mascotActionError}</span>}
+          </SectionCard>
         </div>
       )}
 
@@ -532,6 +671,14 @@ export const BrandConceptView: React.FC = () => {
           message={t.brand_font_delete_confirm}
           onCancel={() => setConfirmDeleteFont(null)}
           onConfirm={() => handleDeleteFont(confirmDeleteFont)}
+        />
+      )}
+      {confirmDeleteMascot && (
+        <ConfirmBar
+          t={t}
+          message={t.brand_mascot_delete_confirm}
+          onCancel={() => setConfirmDeleteMascot(null)}
+          onConfirm={() => handleDeleteMascot(confirmDeleteMascot)}
         />
       )}
     </div>
