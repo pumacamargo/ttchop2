@@ -11,7 +11,7 @@ import type { Translations } from '../i18n';
 
 const HEX_COLOR_RE = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 const FONT_EXTENSIONS = ['.ttf', '.woff', '.woff2'];
-const MASCOT_EMOTIONS = ['happy', 'excited', 'surprised', 'sarcastic', 'annoyed', 'sighs', 'laughs', 'curious'];
+const MASCOT_EMOTIONS = ['idle', 'happily', 'excited', 'surprised', 'sarcastically', 'annoyed', 'sighs', 'laughs', 'curious'];
 const MASCOT_CUSTOM_EMOTION = '__custom__';
 
 interface QueueItem {
