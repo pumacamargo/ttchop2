@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ProductsView } from './components/ProductsView';
 import { SessionsView } from './components/SessionsView';
 import { TemplatesView } from './components/TemplatesView';
@@ -13,6 +13,7 @@ import { BrandConceptView } from './components/BrandConceptView';
 import { ReportsView } from './components/ReportsView';
 import { EditorView } from './components/EditorView';
 import { ToolsView } from './components/ToolsView';
+import { DevLogsView } from './components/DevLogsView';
 import { SidePanel } from './components/SidePanel';
 import { AuthView } from './components/AuthView';
 import { TikTokCallbackView } from './components/TikTokCallbackView';
@@ -32,10 +33,21 @@ import './App.css';
 
 type ProjectsSubTab = 'ai' | 'edit' | 'overlay';
 
+// All valid tab values — must stay in sync with the ActiveTab union in navigation.ts
+const VALID_TABS: ActiveTab[] = [
+  'dashboard', 'products', 'templates', 'create', 'calendar',
+  'analytics', 'brand', 'reports', 'editor', 'tools', 'sessions', 'renders', 'dev',
+];
+
+function getTabFromUrl(): ActiveTab {
+  const tab = new URLSearchParams(window.location.search).get('tab') as ActiveTab;
+  return VALID_TABS.includes(tab) ? tab : 'dashboard';
+}
+
 function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setAppLanguage: (l: string) => void }) {
   const { user, loading, logout } = useAuth();
   const t = useT();
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(getTabFromUrl);
   const [projectsSubTab, setProjectsSubTab] = useState<ProjectsSubTab>('edit');
   const [selectedMaster, setSelectedMaster] = useState<MasterVideo | undefined>(undefined);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -50,6 +62,20 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
 
     loadInitialData();
   }, [user]);
+
+  // URL ↔ tab sync: push to history on navigate, read on popstate (back/forward)
+  const navigateToTab = useCallback((tab: ActiveTab) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    window.history.pushState(null, '', url.toString());
+    setActiveTab(tab);
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => setActiveTab(getTabFromUrl());
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Scroll to top on tab change
   useEffect(() => {
@@ -102,6 +128,7 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
     tools: t.nav_tools,
     sessions: t.nav_clips,
     renders: t.nav_renders,
+    dev: t.nav_dev,
   };
 
   return (
@@ -132,14 +159,14 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
           isOpen={isSidePanelOpen}
           onClose={() => setIsSidePanelOpen(false)}
           activeTab={activeTab}
-          onNavigate={setActiveTab}
+          onNavigate={navigateToTab}
           onLogout={handleLogout}
           isLoggingOut={isLoggingOut}
         />
 
         {/* Dynamic Views Switcher */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
-          {activeTab === 'dashboard' && <DashboardView onGoToAnalytics={() => setActiveTab('analytics')} />}
+          {activeTab === 'dashboard' && <DashboardView onGoToAnalytics={() => navigateToTab('analytics')} />}
           {activeTab === 'products' && <ProductsView />}
           {activeTab === 'sessions' && <SessionsView />}
           {activeTab === 'templates' && (
@@ -147,7 +174,7 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
               language={appLanguage}
               onLanguageChange={setAppLanguage}
               onTemplateSelected={() => {
-                setActiveTab('create');
+                navigateToTab('create');
                 setProjectsSubTab('ai');
               }}
             />
@@ -159,6 +186,7 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
           {activeTab === 'reports' && <ReportsView />}
           {activeTab === 'editor' && <EditorView />}
           {activeTab === 'tools' && <ToolsView />}
+          {activeTab === 'dev' && <DevLogsView />}
           {activeTab === 'create' && (
             <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
               {/* Sub-nav: Video AI / Collage / Overlays */}
@@ -194,9 +222,9 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
               </div>
 
               <div style={{ flex: 1, overflow: 'auto' }}>
-                {projectsSubTab === 'ai' && <MasterCreatorView onGoToCalendar={() => setActiveTab('calendar')} />}
-                {projectsSubTab === 'edit' && <VariationsMatrixView initialMasterVideo={selectedMaster} onGoToCalendar={() => setActiveTab('calendar')} />}
-                {projectsSubTab === 'overlay' && <OverlaysView onGoToCalendar={() => setActiveTab('calendar')} />}
+                {projectsSubTab === 'ai' && <MasterCreatorView onGoToCalendar={() => navigateToTab('calendar')} />}
+                {projectsSubTab === 'edit' && <VariationsMatrixView initialMasterVideo={selectedMaster} onGoToCalendar={() => navigateToTab('calendar')} />}
+                {projectsSubTab === 'overlay' && <OverlaysView onGoToCalendar={() => navigateToTab('calendar')} />}
               </div>
             </div>
           )}
