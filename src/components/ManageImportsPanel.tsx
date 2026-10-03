@@ -7,10 +7,10 @@
 // Fetches its own data independently of AnalyticsView (rather than trusting props) so it has a
 // clean loading/error/retry lifecycle of its own regardless of when the user opens it, and calls
 // `onChanged` after every mutation so the view underneath re-derives without a page reload.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, RefreshCw, ShieldAlert, ClipboardList, FileSpreadsheet, Video as VideoIcon,
-  Trash2, AlertTriangle, Archive,
+  Trash2, AlertTriangle, Archive, BarChart2, CheckCircle2,
 } from 'lucide-react';
 import { db } from '../services/databaseService';
 import type { ImportRecord, ImportType, AnalyticsOrder, TikTokVideoStats } from '../services/databaseService';
@@ -248,6 +248,8 @@ export const ManageImportsPanel: React.FC<ManageImportsPanelProps> = ({ onClose,
                 )}
               </div>
             )}
+
+            <DataGapsSection orders={orders} videoStats={videoStats} t={t} />
           </div>
         )}
       </div>
@@ -376,6 +378,158 @@ const ImportRow: React.FC<{
         {busy && <RefreshCw size={13} className="loading-spinner" style={{ color: 'var(--primary)' }} />}
       </div>
       {error && <p style={{ margin: 0, fontSize: '0.7rem', color: 'var(--danger)' }}>{error}</p>}
+    </div>
+  );
+};
+
+// ── Coverage gap helpers ─────────────────────────────────────────────────────
+
+interface MonthGap {
+  from: string;   // 'YYYY-MM'
+  to: string;     // 'YYYY-MM'
+  months: number;
+  isOpenEnd: boolean; // true when the gap extends to the current month
+}
+
+function ymKey(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function nextMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+}
+
+function prevMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+}
+
+function monthsBetween(from: string, to: string): number {
+  const [fy, fm] = from.split('-').map(Number);
+  const [ty, tm] = to.split('-').map(Number);
+  return (ty - fy) * 12 + (tm - fm) + 1;
+}
+
+function formatYM(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date(y, m - 1, 1));
+}
+
+function computeMonthGaps(isoDates: (string | null | undefined)[]): MonthGap[] {
+  const todayKey = ymKey(new Date());
+  const covered = new Set<string>();
+  for (const iso of isoDates) {
+    if (!iso) continue;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) continue;
+    covered.add(ymKey(d));
+  }
+  if (covered.size === 0) return [];
+
+  const minMonth = Array.from(covered).sort()[0];
+  const gaps: MonthGap[] = [];
+  let gapStart: string | null = null;
+  let cursor = minMonth;
+
+  while (cursor <= todayKey) {
+    if (!covered.has(cursor)) {
+      if (!gapStart) gapStart = cursor;
+    } else if (gapStart) {
+      gaps.push({ from: gapStart, to: prevMonth(cursor), months: monthsBetween(gapStart, prevMonth(cursor)), isOpenEnd: false });
+      gapStart = null;
+    }
+    cursor = nextMonth(cursor);
+  }
+  if (gapStart) {
+    gaps.push({ from: gapStart, to: todayKey, months: monthsBetween(gapStart, todayKey), isOpenEnd: true });
+  }
+  return gaps;
+}
+
+// ── DataGapsSection ───────────────────────────────────────────────────────────
+
+const DataGapsSection: React.FC<{
+  orders: AnalyticsOrder[];
+  videoStats: TikTokVideoStats[];
+  t: Translations;
+}> = ({ orders, videoStats, t }) => {
+  const salesGaps = useMemo(() => computeMonthGaps(orders.map(o => o.orderDate)), [orders]);
+  const videoGaps = useMemo(() => computeMonthGaps(videoStats.map(v => v.postedAt)), [videoStats]);
+
+  const hasSalesData = orders.length > 0;
+  const hasVideoData = videoStats.length > 0;
+  if (!hasSalesData && !hasVideoData) return null;
+
+  const gapRowStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'flex-start', gap: '0.5rem',
+    padding: '0.35rem 0.5rem', borderRadius: 6,
+    background: 'color-mix(in srgb, var(--warning, #f59e0b) 10%, transparent)',
+    border: '1px solid color-mix(in srgb, var(--warning, #f59e0b) 30%, transparent)',
+    fontSize: '0.73rem', color: 'var(--text-primary)',
+  };
+
+  const okRowStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: '0.4rem',
+    fontSize: '0.73rem', color: 'var(--text-muted)',
+  };
+
+  function GapsList({ gaps, hasData }: { gaps: MonthGap[]; hasData: boolean }) {
+    if (!hasData) return <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>{t.manage_imports_gaps_no_data}</p>;
+    if (gaps.length === 0) return <div style={okRowStyle}><CheckCircle2 size={13} style={{ color: 'var(--success, #22c55e)', flexShrink: 0 }} /><span>{t.manage_imports_gaps_none}</span></div>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+        {gaps.map((g, i) => (
+          <div key={i} style={gapRowStyle}>
+            <AlertTriangle size={12} style={{ color: 'var(--warning, #f59e0b)', flexShrink: 0, marginTop: '1px' }} />
+            <span>
+              {formatYM(g.from)}
+              {g.from !== g.to && <> – {formatYM(g.to)}</>}
+              {' · '}
+              {t.manage_imports_gaps_months.replace('{n}', String(g.months))}
+              {g.isOpenEnd && <> · {t.manage_imports_gaps_to_today}</>}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      marginTop: '0.6rem',
+      padding: '0.75rem 0.85rem',
+      borderRadius: 10,
+      background: 'var(--bg-card)',
+      border: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', gap: '0.65rem',
+    }}>
+      <div>
+        <h4 style={{ margin: 0, fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <BarChart2 size={14} style={{ color: 'var(--text-muted)' }} /> {t.manage_imports_gaps_title}
+        </h4>
+        <p style={{ margin: '0.15rem 0 0', fontSize: '0.69rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{t.manage_imports_gaps_subtitle}</p>
+      </div>
+
+      {hasSalesData && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.15rem' }}>
+            <FileSpreadsheet size={12} style={{ color: 'var(--primary)' }} />
+            <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.manage_imports_gaps_sales}</span>
+          </div>
+          <GapsList gaps={salesGaps} hasData={hasSalesData} />
+        </div>
+      )}
+
+      {hasVideoData && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.15rem' }}>
+            <VideoIcon size={12} style={{ color: 'var(--secondary)' }} />
+            <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.manage_imports_gaps_videos}</span>
+          </div>
+          <GapsList gaps={videoGaps} hasData={hasVideoData} />
+        </div>
+      )}
     </div>
   );
 };
