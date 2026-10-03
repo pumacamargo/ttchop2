@@ -2,7 +2,7 @@
 
 > **Importante**: `ttchop-server` es un proyecto aparte que **no vive en este repositorio** (`ttchop2`). Este archivo documenta, desde el lado del cliente, qué endpoints faltan implementar allá para que funciones ya construidas en el frontend dejen de estar "apagadas". El cliente ya está preparado para consumirlos — solo falta el lado del servidor.
 
-**Estado al 2026-08-13** (verificado contra el servidor en vivo y contra `/root/ttchop-server`):
+**Estado al 2026-08-13** (verificado contra el servidor en vivo y contra `/root/projects/ttchop/ttchop-server`):
 
 | Tema | Estado |
 |---|---|

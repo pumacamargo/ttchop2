@@ -135,3 +135,174 @@ Después de desplegar hay que forzar recarga (Ctrl+Shift+R) para ver los cambios
 - No hacer `git commit` ni `push` sin que el usuario lo pida, salvo que haya dado permiso para una
   tanda de trabajo.
 - Verificar las afirmaciones de los subagentes de forma independiente antes de darlas por buenas.
+
+---
+
+## Roadmap: ttchop-bot — Sistema autónomo
+
+> **Última actualización: 2026-09-29.**
+>
+> **Filosofía central:** ttchop-bot hace el 90% del negocio. Cacho hace el 10%: grabar videos y publicarlos.
+> El bot no es una herramienta para que Cacho trabaje — es el negocio corriendo solo.
+>
+> **Interfaz de Cacho:** Telegram (reporte diario consolidado + alertas urgentes). La webapp es un dashboard de auditoría opcional, no el flujo principal.
+
+### Qué hace Cacho (el 10%)
+- Grabar los clips de video (físico)
+- Diseño de arte / thumbnails
+- Revisar y publicar los videos que el bot produjo
+- Leer el reporte diario de Telegram y tomar decisiones si hay algo urgente
+- Responder mensajes de marcas cuando el bot los marca como prioritarios
+
+### Qué hace ttchop-bot (el 90%)
+- Scout: descubrir productos, leer invitaciones, monitorear competidores, gestionar samples
+- Intel: analizar qué funciona, calcular ROI, decidir qué producir hoy
+- Producer: generar collage + overlay + thumbnail automáticamente
+- Delivery: reporte diario en Telegram, alertas de riesgo
+
+---
+
+### Arquitectura ttchop-bot
+
+```
+ttchop-bot/
+├── config/index.js          — configuración + lista de cuentas (multi-cuenta desde el inicio)
+├── scheduler/index.js       — cron jobs: 06:00 scout, 08:00 producer, 20:00 reporte
+├── modules/
+│   ├── risk/index.js        — anti-ban: rate limiting, delays humanos, detección de warnings
+│   ├── scout/
+│   │   ├── adb.js           — helper ADB: unlock, tap, swipe, screenshot
+│   │   ├── navigate.js      — secuencias de navegación en TikTok
+│   │   ├── vision.js        — Claude Haiku Vision: leer screenshots → JSON estructurado
+│   │   └── index.js         — orquestador del scout por cuenta
+│   ├── intel/index.js       — ROI, scoring de productos, decisión de qué producir
+│   ├── producer/index.js    — llama ttchop-server + ttchop-post
+│   ├── delivery/index.js    — Telegram: reporte diario + alertas
+│   └── data/firestore.js    — capa de datos Firestore compartida
+```
+
+**Infraestructura de celulares:**
+- VPS → Pi (Tailscale `100.117.79.114`) → A35 (ADB via socat puerto 5038)
+- Servicios systemd en el Pi: `adb-local` + `adb-proxy` (auto-start en boot)
+- Multi-cuenta: agregar más entradas en `config.accounts[]` cuando haya más celulares
+
+---
+
+### Gestión de riesgo (TikTok ToS)
+
+Cacho ha tenido problemas con TikTok — el riesgo es real. Estrategia:
+
+| Riesgo | Mitigación |
+|--------|-----------|
+| Patrones de timing repetitivos | Delays aleatorios (800ms–3500ms) entre cada acción |
+| Mismas páginas siempre | Browsear el feed 30s antes de navegar a Shop |
+| Demasiadas acciones | Límite de 30 acciones/día por cuenta |
+| Warning de TikTok no detectado | Vision AI revisa cada screenshot antes de procesarlo |
+| Respuestas automáticas a marcas | Prohibido — el bot solo lee y alerta, Cacho responde |
+| Múltiples cuentas en mismo device | Prohibido — una cuenta por celular físico |
+
+---
+
+### Colecciones Firestore nuevas (proyecto ttchop2)
+
+| Colección | Qué guarda |
+|-----------|-----------|
+| `collab_invitations` | Mensajes de marcas con traducción y prioridad |
+| `products_trending` | Productos trending de TikTok Shop con scorecard |
+| `sample_requests` | Solicitudes de muestras gratis con estado |
+| `competitor_videos` | Videos públicos de competidores para análisis |
+| `risk_events` | Advertencias y eventos de riesgo por cuenta |
+
+---
+
+### Estado de implementación
+
+| Módulo | Estado | Notas |
+|--------|--------|-------|
+| `config` (multi-cuenta) | ✅ listo | Galaxy A35 como primera cuenta |
+| `risk/index.js` | ✅ listo | Rate limiting + delays humanos |
+| `scout/adb.js` | ✅ listo | Helper ADB completo |
+| `scout/navigate.js` | ✅ listo | Collab messages, affiliate, samples |
+| `scout/vision.js` | ✅ listo | Claude Haiku Vision |
+| `scout/index.js` | 🔄 parcial | Collab messages implementado; falta el resto |
+| `delivery/index.js` | ✅ listo | Reporte diario + alertas |
+| `data/firestore.js` | ✅ listo | collab_invitations, trending, samples, risk |
+| `intel/index.js` | ⏳ pendiente | ROI + scoring |
+| `producer/index.js` | ⏳ pendiente | Pipeline automático |
+| Scout: affiliate invitations | ⏳ pendiente | |
+| Scout: free samples mgmt | ⏳ pendiente | |
+| Scout: competitor monitoring | ⏳ pendiente | Cacho provee las cuentas |
+| Scout: trending products | ⏳ pendiente | |
+| Scout: analytics propios | ⏳ pendiente | |
+| Scout: tasks/missions | ⏳ pendiente | |
+
+---
+
+### Intel + Scout (roadmap webapp — SECUNDARIO)
+
+### INTEL — conectar datos que ya existen
+
+**Fase I-1: Vista centralizada de Video** ⏳ pendiente
+Nueva vista "Videos" en el menú. Cruza las tres colecciones por `tiktokVideoId`:
+- `renders` → receta: producto, template de guion, voz, overlay, clips, idioma
+- `tiktok_videos` → stats: vistas, likes, shares, watch time
+- `analytics_orders` → ventas: órdenes, GMV, comisión
+
+Un solo objeto por video con todo adentro. Filtrable y ordenable por conversión, comisión o template.
+
+**Fase I-2: Costo de producción + ROI** ⏳ pendiente
+- Campo `productionCost` nuevo en el render (se llena al crear o editar)
+- ROI = comisión generada - costo de producción
+- Visible por video y agregado por producto
+
+**Fase I-3: Semáforo de salud** ⏳ pendiente
+- 🟢 Verde — tiene vistas Y ventas
+- 🟡 Amarillo — tiene vistas pero sin ventas en 14 días
+- 🔴 Rojo — sin vistas en 14 días
+- Aparece en tarjeta de producto y en el Dashboard principal
+
+**Fase I-4: `POST /reports/generate` en ttchop-server** ⏳ pendiente
+- Spec completa ya en `PENDIENTES-SERVIDOR.md`
+- El frontend ya lo llama y maneja el 404 con gracia
+- Responde en markdown: qué funcionó, qué no, 2-4 recomendaciones concretas
+
+---
+
+### SCOUT — nuevo, requiere celular Android (Google Pixel 6a)
+
+**Fase S-1: Infraestructura ADB** ⏳ pendiente (bloqueado: falta el celular)
+Módulo nuevo `pipeline/adb.js` en `ttchop-server`:
+- Conexión ADB over WiFi al Pixel 6a
+- Health check cada 5 minutos con auto-reconexión
+- Cola de tareas para cuando el celular estaba offline
+- Endpoint `GET /scout/health` para monitoreo desde ttchop2
+
+**Fase S-2: Vista Scout — Descubrimiento de productos** ⏳ pendiente (bloqueado: falta S-1)
+Nueva sección "Scout" en el menú de ttchop2:
+- Navega TikTok Shop vía ADB y extrae productos trending
+- Scorecard por producto: comisión % · precio · número de competidores · reviews
+- Botón "Producir" → agrega el producto directo al catálogo en Firestore
+
+**Fase S-3: Gestión de marcas** ⏳ pendiente (bloqueado: falta S-1)
+Subsección "Marcas" dentro de Scout:
+- Lee bandeja de invitaciones de TikTok Shop vía ADB
+- Califica cada invitación automáticamente (comisión, producto, historial)
+- CRM simple: estado por marca (nueva / contactada / negociando / activa / descartada)
+- Genera borrador de outreach basado en las mejores métricas del creador
+
+---
+
+### Orden de construcción
+
+```
+Sin celular (ahora):
+  I-1  Vista centralizada de Video
+  I-2  Costo de producción + ROI
+  I-3  Semáforo de salud
+  I-4  POST /reports/generate (en ttchop-server)
+
+Con celular (cuando llegue el Pixel 6a):
+  S-1  Infraestructura ADB
+  S-2  Descubrimiento de productos
+  S-3  Gestión de marcas
+```

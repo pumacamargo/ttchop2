@@ -12,6 +12,7 @@ import {
   FileBarChart,
   Repeat2,
   LogOut,
+  Terminal,
 } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
 import type { ActiveTab } from '../types/navigation';
@@ -74,6 +75,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, activeTab
     { tab: 'editor', label: t.nav_editor, icon: <Scissors size={19} />, soon: true },
     { tab: 'tools', label: t.nav_tools, icon: <Wrench size={19} />, soon: true },
     { tab: 'reports', label: t.nav_reports, icon: <FileBarChart size={19} /> },
+    { tab: 'dev', label: t.nav_dev, icon: <Terminal size={19} /> },
   ];
 
   const handleNavigate = (tab: ActiveTab) => {

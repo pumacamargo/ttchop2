@@ -13,4 +13,5 @@ export type ActiveTab =
   | 'editor'
   | 'tools'
   | 'sessions'  // internal route, no SidePanel item (Phase 2: moves into Products)
-  | 'renders';  // internal route, no SidePanel item (Phase 2: moves into Products)
+  | 'renders'   // internal route, no SidePanel item (Phase 2: moves into Products)
+  | 'dev';      // Development — logs de automatizaciones
