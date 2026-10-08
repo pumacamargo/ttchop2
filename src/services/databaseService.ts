@@ -260,7 +260,7 @@ export interface AnalyticsOrder extends ParsedAnalyticsOrder {
 // an import of 500 orders to another account is one write to this doc, not 500. Documents that
 // predate this collection have no `importId` pointing at one, and keep resolving their container
 // from their own (legacy) `accountId` field — see getEffectiveContainer() in containerVisibility.ts.
-export type ImportType = 'sales_file' | 'studio_scrape';
+export type ImportType = 'sales_file' | 'studio_scrape' | 'sales_reference';
 
 export interface ImportRecord {
   id: string;
@@ -3988,6 +3988,28 @@ class DatabaseService {
     if (!user) throw new Error('Not authenticated');
     await deleteDoc(doc(firestore, 'reports', user.uid, 'history', id));
   }
+
+  /** Import sales reference file - stored for reference, not included in analytics calculations. */
+  async importSalesReference(file: File, accountId?: string): Promise<ImportRecord> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+    
+    const id = `import_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const record: ImportRecord = { 
+      id,
+      userId: user.uid,
+      type: 'sales_reference',
+      label: file.name,
+      itemCount: 0,
+      importedAt: new Date().toISOString(),
+      ...(accountId && { accountId }),
+    };
+    
+    await setDoc(doc(firestore, 'imports', id), stripUndefined(record));
+    return record;
+  }
+
+  /** Import sales reference file (from other accounts, for reference only - not included in analytics). */
 }
 
 export const db = new DatabaseService();
