@@ -110,6 +110,12 @@ service cloud.firestore {
       allow create, update: if request.auth != null && request.auth.uid == request.resource.data.userId;
     }
 
+    // Sales reference data: imported files from other accounts for reference only
+    // (don't count towards analytics). Path-scoped by userId like analytics_orders.
+    match /sales_reference_data/{userId}/rows/{rowId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
     // Logs de debug de automatizaciones — escritura solo desde backend (Admin SDK),
     // lectura para cualquier usuario autenticado (app de un solo usuario).
     match /dev_logs/{logId} {

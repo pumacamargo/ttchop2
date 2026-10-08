@@ -18,6 +18,8 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
 import type { ParsedAnalyticsOrder } from './analyticsImport';
+
+import * as XLSX from 'xlsx';
 // Pure, framework-free filtering logic lives in utils so every view can unit test it without
 // pulling in Firebase — re-exported here so callers of this service don't need a second import.
 export { getVisibleForContainer, isGeneralContainer, getEffectiveContainer } from '../utils/containerVisibility';
@@ -3735,8 +3737,11 @@ class DatabaseService {
     const refs: DocumentReference[] = importData.type === 'sales_file'
       ? (await getDocs(collection(firestore, 'analytics_orders', user.uid, 'orders')))
           .docs.filter(d => d.data().importId === importId).map(d => d.ref)
-      : (await getDocs(query(collection(firestore, 'tiktok_videos'), where('userId', '==', user.uid))))
-          .docs.filter(d => d.data().importId === importId).map(d => d.ref);
+      : importData.type === 'sales_reference'
+        ? (await getDocs(collection(firestore, 'sales_reference_data', user.uid, 'rows')))
+            .docs.filter(d => d.data().importId === importId).map(d => d.ref)
+        : (await getDocs(query(collection(firestore, 'tiktok_videos'), where('userId', '==', user.uid))))
+            .docs.filter(d => d.data().importId === importId).map(d => d.ref);
 
     const BATCH_LIMIT = 500;
     for (let i = 0; i < refs.length; i += BATCH_LIMIT) {
@@ -3762,8 +3767,11 @@ class DatabaseService {
     const refs: DocumentReference[] = type === 'sales_file'
       ? (await getDocs(collection(firestore, 'analytics_orders', user.uid, 'orders')))
           .docs.filter(d => !d.data().importId).map(d => d.ref)
-      : (await getDocs(query(collection(firestore, 'tiktok_videos'), where('userId', '==', user.uid))))
-          .docs.filter(d => !d.data().importId).map(d => d.ref);
+      : type === 'sales_reference'
+        ? (await getDocs(collection(firestore, 'sales_reference_data', user.uid, 'rows')))
+            .docs.filter(d => !d.data().importId).map(d => d.ref)
+        : (await getDocs(query(collection(firestore, 'tiktok_videos'), where('userId', '==', user.uid))))
+            .docs.filter(d => !d.data().importId).map(d => d.ref);
 
     const BATCH_LIMIT = 500;
     for (let i = 0; i < refs.length; i += BATCH_LIMIT) {
@@ -3990,26 +3998,89 @@ class DatabaseService {
   }
 
   /** Import sales reference file - stored for reference, not included in analytics calculations. */
-  async importSalesReference(file: File, accountId?: string): Promise<ImportRecord> {
+  async importSalesReference(file: File, accountId?: string): Promise<{ importId: string; rowCount: number }> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     
-    const id = `import_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const record: ImportRecord = { 
-      id,
-      userId: user.uid,
+    // Parse Excel file (same way as analytics imports, but without column validation)
+    const ext = file.name.toLowerCase().split('.').pop();
+    let workbook: XLSX.WorkBook;
+    
+    try {
+      if (ext === 'csv') {
+        const text = await file.text();
+        workbook = XLSX.read(text, { type: 'string' });
+      } else {
+        const buffer = await file.arrayBuffer();
+        workbook = XLSX.read(buffer, { type: 'array' });
+      }
+    } catch (err) {
+      throw new Error('File could not be read - it may be corrupted or in an unsupported format');
+    }
+
+    // Get first sheet (don't require specific sheet name for reference data)
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) throw new Error('No data sheets found in file');
+    
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+    
+    if (rows.length === 0) throw new Error('File has no data rows');
+
+    // Create import record with actual row count
+    const now = new Date().toISOString();
+    const importRecord = await this.createImport({
       type: 'sales_reference',
       label: file.name,
-      itemCount: 0,
-      importedAt: new Date().toISOString(),
+      itemCount: rows.length,
+      importedAt: now,
       ...(accountId && { accountId }),
-    };
-    
-    await setDoc(doc(firestore, 'imports', id), stripUndefined(record));
-    return record;
+    });
+
+    // Store rows in sales_reference_data collection (similar structure to analytics_orders)
+    const BATCH_LIMIT = 500;
+    for (let i = 0; i < rows.length; i += BATCH_LIMIT) {
+      const chunk = rows.slice(i, i + BATCH_LIMIT);
+      const batch = writeBatch(firestore);
+      chunk.forEach((row, idx) => {
+        const rowId = `${importRecord.id}_row_${i + idx}`;
+        const ref = doc(firestore, 'sales_reference_data', user.uid, 'rows', rowId);
+        batch.set(ref, { 
+          id: rowId,
+          importId: importRecord.id,
+          data: row,
+          rowIndex: i + idx,
+          userId: user.uid,
+          importedAt: now,
+        });
+      });
+      await batch.commit();
+    }
+
+    return { importId: importRecord.id, rowCount: rows.length };
   }
 
-  /** Import sales reference file (from other accounts, for reference only - not included in analytics). */
+  /** Get all sales reference rows for a user (for viewing/exporting). */
+  async getSalesReferenceData(importId?: string): Promise<Array<{ id: string; data: Record<string, unknown>; rowIndex: number; importId: string }>> {
+    const user = auth.currentUser;
+    if (!user) return [];
+    
+    const baseRef = collection(firestore, 'sales_reference_data', user.uid, 'rows');
+    const q = importId 
+      ? query(baseRef, where('importId', '==', importId))
+      : baseRef;
+    
+    const snap = await getDocs(q);
+    return snap.docs.map(d => {
+      const data = d.data();
+      return {
+        id: data.id,
+        data: data.data as Record<string, unknown>,
+        rowIndex: data.rowIndex as number,
+        importId: data.importId as string,
+      };
+    }).sort((a, b) => a.rowIndex - b.rowIndex);
+  }
 }
 
 export const db = new DatabaseService();

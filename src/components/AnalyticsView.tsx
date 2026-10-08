@@ -205,7 +205,13 @@ export const AnalyticsView: React.FC = () => {
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [refImporting, setRefImporting] = useState(false);
+  const [refImportResult, setRefImportResult] = useState<{ fileName: string; rowCount: number } | null>(null);
+  const [refImportError, setRefImportError] = useState('');
+
   const mountedRef = useRef(true);
+  const refInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
@@ -402,6 +408,26 @@ export const AnalyticsView: React.FC = () => {
       setImportStep('');
     }
   };
+  const handleSalesReferenceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setRefImportError('');
+    setRefImportResult(null);
+
+    try {
+      setRefImporting(true);
+      const result = await db.importSalesReference(file, activeAccountId ?? undefined);
+      setRefImportResult({ fileName: file.name, rowCount: result.rowCount });
+    } catch (error) {
+      setRefImportError(`Failed to import: ${error}`);
+    } finally {
+      setRefImporting(false);
+    }
+
+    if (refInputRef.current) refInputRef.current.value = '';
+  };
+
 
   const maxProductGmv = topProducts.length > 0 ? topProducts[0].gmv : 0;
 
@@ -511,6 +537,53 @@ export const AnalyticsView: React.FC = () => {
             </button>
           </div>
         )}
+
+      {/* ── Reference Sales Data Upload (secondary, low-emphasis by design) ───────── */}
+      <div style={{
+        marginTop: '0.9rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)',
+        display: 'flex', flexDirection: 'column', gap: '0.45rem',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <FileSpreadsheet size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+          <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+            Reference data
+          </span>
+        </div>
+        <p style={{ margin: 0, fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+          Upload sales files from other accounts for reference only — stored in Firestore, never counted in analytics.
+        </p>
+        <button
+          onClick={() => refInputRef.current?.click()}
+          disabled={refImporting}
+          className="btn btn-secondary"
+          style={{ width: 'auto', alignSelf: 'flex-start', minHeight: '36px', padding: '0 0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem' }}
+        >
+          <Upload size={12} /> {refImporting ? 'Uploading…' : 'Upload reference file'}
+        </button>
+        <input ref={refInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleSalesReferenceUpload} style={{ display: 'none' }} disabled={refImporting} />
+
+        {refImportResult && !refImporting && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: '0.5rem', padding: '0.5rem 0.7rem', borderRadius: 8,
+            background: 'color-mix(in srgb, var(--success) 6%, transparent)', border: '1px solid color-mix(in srgb, var(--success) 18%, transparent)',
+          }}>
+            <CheckCircle2 size={14} style={{ color: 'var(--success)', flexShrink: 0, marginTop: '1px' }} />
+            <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
+              <strong style={{ color: 'var(--text-primary)' }}>{refImportResult.fileName}</strong>: {refImportResult.rowCount} row{refImportResult.rowCount === 1 ? '' : 's'} saved for reference.
+            </p>
+          </div>
+        )}
+
+        {refImportError && !refImporting && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: '0.5rem', padding: '0.5rem 0.7rem', borderRadius: 8,
+            background: 'color-mix(in srgb, var(--danger) 6%, transparent)', border: '1px solid color-mix(in srgb, var(--danger) 18%, transparent)',
+          }}>
+            <AlertTriangle size={14} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: '1px' }} />
+            <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0, flex: 1, wordBreak: 'break-word' }}>{refImportError}</p>
+          </div>
+        )}
+      </div>
       </div>
 
       {/* ── Body: loading / error / empty / dashboard ───────────────────── */}
