@@ -101,11 +101,30 @@ export interface Session {
   createdAt: string;
 }
 
-export type TemplateType = 'aiGen' | 'collage' | 'voice' | 'overlay';
+export type TemplateType = 'aiGen' | 'collage' | 'voice' | 'overlay' | 'carousel_script' | 'carousel_style';
+
+// carousel_style.typography (TTC-56 / plan TTC-55 §5) — parametriza el layout React
+// (CarouselSlide en ttchop-post_templates) por styleTemplate.layoutId. Todos opcionales:
+// el layout trae sus propios defaults si el template no los especifica.
+export interface CarouselTypography {
+  fontFamily?: string;
+  useBrandFont?: boolean; // hereda fuentes del BrandConcept del accountId en vez de fontFamily
+  weight?: number;
+  case?: 'uppercase' | 'none';
+  sizeScale?: number;
+  tracking?: number;
+  color?: string;
+  accentColor?: string;
+  textPosition?: 'top' | 'center' | 'bottom';
+  background?: 'none' | 'band' | 'blur' | 'gradient';
+}
 
 export interface Template {
   id: string;
   userId?: string;
+  // Contenedor opcional (patrón de contenedores de webapp2, como Product.accountId).
+  // Ausente = template general del usuario, visible en todas sus cuentas.
+  accountId?: string;
   type: TemplateType;
   title: string;
   description: string;  // short summary shown in the card
@@ -113,6 +132,22 @@ export interface Template {
   voiceId?: string;     // ElevenLabs voice ID (only for type 'voice')
   referenceVideoUrl?: string;
   createdAt: string;
+  // Templates sembrados (seedCarouselTemplates) llevan seed:true + seedVersion para poder
+  // actualizar el catálogo de defaults sin pisar ediciones que el usuario ya haya hecho.
+  seed?: boolean;
+  seedVersion?: number;
+  // carousel_script (plan §5): instrucción de estructura narrativa para el LLM.
+  slideCount?: { min: number; max: number; default: number };
+  roles?: string[]; // ej. ['hook','body','body','body','cta']
+  maxCharsPerSlide?: number;
+  captionStyle?: string;
+  // carousel_style (plan §5): dirección de arte compartida entre todos los slides.
+  visualBible?: string;      // prefijo de prompt compartido: luz, lente, paleta, grano, época
+  imagePromptHints?: string; // cómo traducir el texto de cada slide a una escena (photo-only)
+  negative?: string;         // se agrega siempre al prompt de imagen — ver DEFAULT_NEGATIVE en el server
+  layoutId?: string;         // layout React en CarouselSlide (ttchop-post_templates)
+  typography?: CarouselTypography;
+  aspect?: string;           // '9:16' (D6, único formato por ahora)
 }
 
 export type RenderType = 'ai' | 'collage' | 'overlay' | 'collage+overlay';
@@ -2326,6 +2361,107 @@ FINAL WRITING RULES
   }
 ];
 
+// ── Carousel templates (TTC-56 Fase 3) ──────────────────────────────────────────
+// Sembrados por separado de SEED_TEMPLATES (ver seedCarouselTemplates): a diferencia
+// del seed general, que solo corre si el usuario no tiene NINGÚN template, este
+// backfillea usuarios existentes (como Arturo) que ya tenían templates de otros tipos
+// antes de que existiera esta feature. seed:true + seedVersion permiten en el futuro
+// re-sembrar/actualizar los defaults sin pisar templates que el usuario ya editó.
+const CAROUSEL_SEED_VERSION = 1;
+
+// Negative obligatorio del plan TTC-55 §0: fotos realistas, nunca texto/logos/marca
+// de agua dentro de la imagen generada — el texto del slide SIEMPRE va como overlay
+// de Remotion, nunca pintado por el modelo de imagen.
+const CAROUSEL_DEFAULT_NEGATIVE =
+  'photorealistic photo, no text, no typography, no letters, no words, no signage, no logos, no watermarks, not an illustration, not 3D render';
+
+const SEED_CAROUSEL_STYLES: Array<Omit<Template, 'id' | 'userId' | 'createdAt' | 'type'>> = [
+  {
+    title: 'Cinematic Concert Still',
+    description: 'Dramatic stage photography — spotlights, haze, bold condensed type. Alto impacto para hooks.',
+    visualBible: 'Cinematic concert photography, dramatic stage lighting cutting through haze, shallow depth of field, 35mm film grain, moody teal and magenta color grade, high contrast, handheld documentary energy',
+    imagePromptHints: "Translate each slide's idea into a dramatic concert or backstage photo metaphor — a stage, a spotlight, an instrument, haze, a silhouette.",
+    negative: CAROUSEL_DEFAULT_NEGATIVE,
+    layoutId: 'cinematic-concert-still',
+    typography: { weight: 400, case: 'uppercase', sizeScale: 1, tracking: 2, color: '#ffffff', accentColor: '#ff3df0', textPosition: 'bottom', background: 'gradient' },
+    aspect: '9:16',
+    seed: true,
+    seedVersion: CAROUSEL_SEED_VERSION,
+  },
+  {
+    title: 'Museum Exhibition System',
+    description: 'Minimalist gallery photography — objetos en pedestales, luz suave, tipografía serif clásica.',
+    visualBible: 'Minimalist museum exhibition photography, soft diffused gallery lighting, neutral beige and white tones, clean symmetrical composition, medium format film look, objects displayed on pedestals or plinths',
+    imagePromptHints: "Translate each slide's idea into an object or scene displayed like a museum exhibit — on a pedestal, under gallery lighting, with generous negative space.",
+    negative: CAROUSEL_DEFAULT_NEGATIVE,
+    layoutId: 'museum-exhibition-system',
+    typography: { weight: 500, case: 'none', sizeScale: 1, tracking: 0.5, color: '#2b2622', accentColor: '#8a7a5c', textPosition: 'bottom', background: 'band' },
+    aspect: '9:16',
+    seed: true,
+    seedVersion: CAROUSEL_SEED_VERSION,
+  },
+  {
+    title: 'Experimental Type Sculpture',
+    description: 'Formas geométricas abstractas, sombras duras, paleta monocromática. Layout llega en la Fase 5 — hoy usa Cinematic como fallback visual.',
+    visualBible: 'Abstract sculptural still life photography, bold geometric shapes and hard directional shadows, studio lighting, monochrome or duotone color palette, architectural forms',
+    imagePromptHints: "Translate each slide's idea into an abstract sculptural arrangement of geometric objects and shadows — no literal illustration, just form, light and shadow.",
+    negative: CAROUSEL_DEFAULT_NEGATIVE,
+    layoutId: 'experimental-type-sculpture',
+    typography: { weight: 700, case: 'uppercase', sizeScale: 1.1, tracking: 1, color: '#ffffff', accentColor: '#f5c518', textPosition: 'center', background: 'blur' },
+    aspect: '9:16',
+    seed: true,
+    seedVersion: CAROUSEL_SEED_VERSION,
+  },
+  {
+    title: 'Surreal Stage Architecture',
+    description: 'Arquitectura onírica, escaleras imposibles, paleta pastel. Layout llega en la Fase 5 — hoy usa Cinematic como fallback visual.',
+    visualBible: 'Surreal architectural photography, impossible staircases and oversized doorways, soft pastel color grade, dreamlike studio lighting, fine art photography aesthetic',
+    imagePromptHints: "Translate each slide's idea into a surreal architectural scene — an impossible structure, an oversized object, a dreamlike space that visually echoes the idea without literal illustration.",
+    negative: CAROUSEL_DEFAULT_NEGATIVE,
+    layoutId: 'surreal-stage-architecture',
+    typography: { weight: 400, case: 'none', sizeScale: 1, tracking: 0.5, color: '#2a2a2a', accentColor: '#c9a0dc', textPosition: 'top', background: 'none' },
+    aspect: '9:16',
+    seed: true,
+    seedVersion: CAROUSEL_SEED_VERSION,
+  },
+];
+
+const SEED_CAROUSEL_SCRIPTS: Array<Omit<Template, 'id' | 'userId' | 'createdAt' | 'type'>> = [
+  {
+    title: 'Lista 7 slides',
+    description: 'Formato lista enumerada: hook + N puntos accionables + cierre con CTA. El default recomendado (D3).',
+    content: 'Formato lista enumerada. Slide 1 = hook que detiene el scroll (pregunta provocadora o afirmación fuerte). Slides 2 a N-1 = un punto de la lista por slide, cada uno autocontenido y accionable. Último slide = cierre con llamada a guardar o seguir.',
+    slideCount: { min: 5, max: 10, default: 7 },
+    roles: ['hook', 'body', 'body', 'body', 'body', 'body', 'cta'],
+    maxCharsPerSlide: 140,
+    captionStyle: 'Corto (1-2 líneas), tono directo, 3-5 hashtags relevantes al tema.',
+    seed: true,
+    seedVersion: CAROUSEL_SEED_VERSION,
+  },
+  {
+    title: 'Mito vs. Realidad',
+    description: 'Formato mito vs realidad: contrapone creencias comunes contra la realidad, slide por slide.',
+    content: "Formato mito vs realidad. Slide 1 = hook planteando que hay creencias equivocadas sobre el tema. Slides siguientes alternan: 'Mito: ...' seguido de 'Realidad: ...' (pueden ir en el mismo slide o en slides consecutivos). Último slide = cierre con CTA de guardar/seguir.",
+    slideCount: { min: 6, max: 9, default: 7 },
+    roles: ['hook', 'body', 'body', 'body', 'body', 'body', 'cta'],
+    maxCharsPerSlide: 160,
+    captionStyle: 'Medio, tono que genera curiosidad, 3-5 hashtags.',
+    seed: true,
+    seedVersion: CAROUSEL_SEED_VERSION,
+  },
+  {
+    title: 'Cosas que nadie te dice',
+    description: 'Formato confesional/insider: revela una cosa poco conocida por slide, tono cercano.',
+    content: "Formato confesional/insider. Slide 1 = hook tipo '[N] cosas que nadie te dice sobre [tema]'. Cada slide siguiente revela UNA cosa poco conocida o contraintuitiva, en tono cercano y directo, como si un amigo te contara un secreto. Último slide = CTA de guardar/seguir.",
+    slideCount: { min: 5, max: 8, default: 6 },
+    roles: ['hook', 'body', 'body', 'body', 'body', 'cta'],
+    maxCharsPerSlide: 150,
+    captionStyle: 'Tono personal/confesional, 1 pregunta al final para generar comentarios, 3-5 hashtags.',
+    seed: true,
+    seedVersion: CAROUSEL_SEED_VERSION,
+  },
+];
+
 // Documentos guardados en Firestore antes de la migración a `videos[]` todavía tienen el
 // campo viejo `bRolls[]` (sin section/source/trim). Se normalizan al leerlos para no romper la UI.
 //
@@ -2382,6 +2518,8 @@ function normalizeTemplate(raw: any): Template {
     collage: 'collage',
     voice: 'voice',
     overlay: 'overlay',
+    carousel_script: 'carousel_script',
+    carousel_style: 'carousel_style',
   };
   const type: TemplateType = typeMap[raw.type] ?? 'collage';
   return { ...raw, type } as Template;
@@ -2394,8 +2532,17 @@ function normalizeTemplate(raw: any): Template {
  * calendario) tienen muchos campos que solo aplican a ciertos tipos, así que se limpia de forma
  * centralizada en vez de confiar en que cada llamador se acuerde.
  */
+// Recursivo (no solo top-level): campos anidados como Template.typography pueden
+// llegar con sub-keys en undefined (ej. un <select> de typography que el usuario
+// nunca tocó) y Firestore rechaza la escritura COMPLETA si cualquier nivel trae
+// undefined, no solo el nivel superior. Deja arrays intactos (nunca los recorre).
 function stripUndefined<T extends object>(data: T): Partial<T> {
-  return Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined)) as Partial<T>;
+  const cleaned: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (v === undefined) continue;
+    cleaned[k] = (v !== null && typeof v === 'object' && !Array.isArray(v)) ? stripUndefined(v as object) : v;
+  }
+  return cleaned as Partial<T>;
 }
 
 /**
@@ -2451,6 +2598,8 @@ function resolveWebhookUrl(n8nProdName: string, serverPath: string): string {
 class DatabaseService {
   private seededUsers = new Set<string>(); // Track which users have been seeded in this session
   private seedingPromises = new Map<string, Promise<void>>(); // De-dupe concurrent seed calls (e.g. React StrictMode double-invoke)
+  private seededCarouselUsers = new Set<string>(); // TTC-56 — independiente del seed general, ver seedCarouselTemplates
+  private carouselSeedingPromises = new Map<string, Promise<void>>();
 
   // Seed initial template data if the user has no templates
   async seedUserDatabase(uid: string): Promise<void> {
@@ -2513,6 +2662,69 @@ class DatabaseService {
 
     // Mark user as seeded
     this.seededUsers.add(uid);
+    localStorage.setItem(seededKey, 'true');
+  }
+
+  // TTC-56 Fase 3 — siembra los 4 estilos + 3 guiones de carrusel. A propósito
+  // SEPARADA de seedUserDatabaseInner: esa solo corre si el usuario no tiene NINGÚN
+  // template (así que nunca backfillearía a un usuario existente como Arturo, que ya
+  // tenía templates de otros tipos antes de esta feature). Esta en cambio solo revisa
+  // si YA hay templates de tipo carousel_script/carousel_style con seed:true, y si no
+  // hay ninguno, los crea — funciona igual para un usuario nuevo o uno viejo.
+  async seedCarouselTemplates(uid: string): Promise<void> {
+    const inFlight = this.carouselSeedingPromises.get(uid);
+    if (inFlight) return inFlight;
+
+    const promise = this.seedCarouselTemplatesInner(uid).finally(() => {
+      this.carouselSeedingPromises.delete(uid);
+    });
+    this.carouselSeedingPromises.set(uid, promise);
+    return promise;
+  }
+
+  private async seedCarouselTemplatesInner(uid: string): Promise<void> {
+    if (this.seededCarouselUsers.has(uid)) return;
+
+    const seededKey = `ttchop_seeded_carousel_${uid}`;
+    if (localStorage.getItem(seededKey)) {
+      this.seededCarouselUsers.add(uid);
+      return;
+    }
+
+    // Un solo where() + filtro en JS, mismo patrón cauteloso que el resto del archivo
+    // (ver "Single-field query" en pipeline/scheduler.js del lado servidor) — evita
+    // depender de un índice compuesto nuevo que no existe todavía en producción.
+    const q = query(collection(firestore, 'templates'), where('userId', '==', uid));
+    const snap = await getDocs(q);
+    const hasCarouselSeed = snap.docs.some(d => {
+      const data = d.data();
+      return data.seed === true && (data.type === 'carousel_script' || data.type === 'carousel_style');
+    });
+
+    if (hasCarouselSeed) {
+      this.seededCarouselUsers.add(uid);
+      localStorage.setItem(seededKey, 'true');
+      return;
+    }
+
+    console.log('Seeding carousel templates for user: ', uid);
+
+    const seedEntries = [
+      ...SEED_CAROUSEL_STYLES.map(t => ({ ...t, type: 'carousel_style' as TemplateType })),
+      ...SEED_CAROUSEL_SCRIPTS.map(t => ({ ...t, type: 'carousel_script' as TemplateType })),
+    ];
+
+    for (const t of seedEntries) {
+      const tempId = `temp_${Math.random().toString(36).substring(2, 9)}`;
+      await setDoc(doc(firestore, 'templates', tempId), stripUndefined({
+        ...t,
+        id: tempId,
+        userId: uid,
+        createdAt: new Date().toISOString(),
+      }));
+    }
+
+    this.seededCarouselUsers.add(uid);
     localStorage.setItem(seededKey, 'true');
   }
 
@@ -2845,6 +3057,10 @@ class DatabaseService {
     const user = auth.currentUser;
     if (!user) return [];
 
+    // Backfillea los templates de carrusel aunque el usuario ya tuviera otros
+    // templates de antes (ver seedCarouselTemplates) — no depende de seedUserDatabase.
+    await this.seedCarouselTemplates(user.uid);
+
     const q = query(
       collection(firestore, 'templates'),
       where('userId', '==', user.uid)
@@ -2873,10 +3089,24 @@ class DatabaseService {
       ...(template.content && { content: template.content }),
       ...(template.voiceId && { voiceId: template.voiceId }),
       ...(template.referenceVideoUrl && { referenceVideoUrl: template.referenceVideoUrl }),
+      ...(template.accountId && { accountId: template.accountId }),
+      ...(template.slideCount && { slideCount: template.slideCount }),
+      ...(template.roles && { roles: template.roles }),
+      ...(template.maxCharsPerSlide && { maxCharsPerSlide: template.maxCharsPerSlide }),
+      ...(template.captionStyle && { captionStyle: template.captionStyle }),
+      ...(template.visualBible && { visualBible: template.visualBible }),
+      ...(template.imagePromptHints && { imagePromptHints: template.imagePromptHints }),
+      ...(template.negative && { negative: template.negative }),
+      ...(template.layoutId && { layoutId: template.layoutId }),
+      ...(template.typography && { typography: template.typography }),
+      ...(template.aspect && { aspect: template.aspect }),
       createdAt: new Date().toISOString()
     };
 
-    await setDoc(doc(firestore, 'templates', tempId), newTemplate);
+    // stripUndefined cubre sobre todo `typography`: si el usuario toca un campo del
+    // formulario y lo vuelve a vaciar, ese sub-campo llega como undefined explícito
+    // (mismo bug que en updateTemplate, ver comentario ahí).
+    await setDoc(doc(firestore, 'templates', tempId), stripUndefined(newTemplate) as Template);
     return newTemplate;
   }
 
@@ -2885,7 +3115,12 @@ class DatabaseService {
     if (!user) throw new Error("User not authenticated");
 
     const docRef = doc(firestore, 'templates', templateId);
-    await updateDoc(docRef, updates);
+    // stripUndefined: un campo opcional vacío (ej. carousel_script.captionStyle,
+    // carousel_style.typography.color) puede llegar como `undefined` explícito desde
+    // el formulario — Firestore rechaza updateDoc() entero si CUALQUIER campo,
+    // incluso anidado, es undefined (TTC-56, bug encontrado al verificar la edición
+    // de templates de carrusel desde la UI).
+    await updateDoc(docRef, stripUndefined(updates));
   }
 
   async deleteTemplate(templateId: string): Promise<void> {
