@@ -192,6 +192,52 @@ export interface Render {
   language?: string;
 }
 
+// ── Carousels (TTC-56, plan TTC-55 §4) ──────────────────────────────────────────
+// Esquema espejo del doc que escribe ttchop-server (routes/carousel.js,
+// pipeline/carouselStore.js) con el admin SDK — el cliente SOLO lee y borra, nunca
+// escribe directo (ver firestore.rules). `callbackToken` nunca llega al cliente, el
+// server lo omite de toda respuesta HTTP y el doc nunca debería mostrarlo tampoco,
+// pero por si acaso no se declara el campo acá.
+export type CarouselStatus = 'planning' | 'text_review' | 'generating_images' | 'composing' | 'ready' | 'failed';
+
+export interface CarouselSlide {
+  index: number;
+  role: string; // 'hook' | 'body' | 'cta' | lo que defina el scriptTemplate
+  text: string;
+  imagePrompt: string;
+  bg?: { status: 'none' | 'pending' | 'done' | 'failed'; url?: string; storagePath?: string; attempts?: number; taskId?: string };
+  final?: { url: string; storagePath?: string | null };
+  error?: string;
+}
+
+export interface CarouselTemplateRef {
+  id: string | null;
+  title: string | null;
+  snapshot: Record<string, any>; // copia del scriptTemplate/styleTemplate al momento de generar
+}
+
+export interface Carousel {
+  id: string;
+  userId: string;
+  accountId?: string | null;
+  projectId: string;
+  status: CarouselStatus;
+  script: string;
+  language: string;
+  imageModel: string;
+  scriptTemplate: CarouselTemplateRef;
+  styleTemplate: CarouselTemplateRef;
+  seed: number;
+  slides: CarouselSlide[];
+  caption: string;
+  hashtags: string[];
+  packageZipUrl?: string | null;
+  cost: { credits: number };
+  errorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ScheduledRenderStatus = 'pending' | 'running' | 'done' | 'failed';
 export type ScheduledRenderType = 'collage' | 'overlay' | 'collage+overlay' | 'ai';
 
@@ -3602,6 +3648,87 @@ class DatabaseService {
 
   async deleteRender(id: string): Promise<void> {
     await deleteDoc(doc(firestore, 'renders', id));
+  }
+
+  // ── Carousels (TTC-56 Fase 4) ──────────────────────────────────────────────
+  // El cliente SOLO lee/borra directo a Firestore. Crear, aprobar texto, regenerar
+  // y recomponer pasan SIEMPRE por ttchop-server (admin SDK) — ver firestore.rules.
+  async getCarousels(): Promise<Carousel[]> {
+    const user = auth.currentUser;
+    if (!user) return [];
+    const q = query(collection(firestore, 'carousels'), where('userId', '==', user.uid));
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as Carousel))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async getCarousel(carouselId: string): Promise<Carousel | null> {
+    const snap = await getDoc(doc(firestore, 'carousels', carouselId));
+    return snap.exists() ? ({ id: snap.id, ...snap.data() } as Carousel) : null;
+  }
+
+  async deleteCarousel(carouselId: string): Promise<void> {
+    await deleteDoc(doc(firestore, 'carousels', carouselId));
+  }
+
+  async createCarousel(params: {
+    script: string;
+    scriptTemplateId: string;
+    styleTemplateId: string;
+    language: string;
+    imageModel: string;
+    slideCount?: number;
+    accountId?: string;
+    dryRun?: boolean;
+    autoApprove?: boolean;
+  }): Promise<{ carouselId: string; carousel: Carousel }> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not authenticated');
+
+    const res = await fetch(`${TTCHOP_SERVER_URL}/carousel/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: user.uid,
+        projectId: FIREBASE_PROJECT_ID,
+        ...stripUndefined(params),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `carousel/create respondió ${res.status}`);
+    return data;
+  }
+
+  async approveCarouselText(carouselId: string, edits?: { slides?: { index: number; text?: string; imagePrompt?: string }[]; caption?: string }): Promise<Carousel> {
+    const res = await fetch(`${TTCHOP_SERVER_URL}/carousel/${carouselId}/approve-text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: FIREBASE_PROJECT_ID, ...edits }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `approve-text respondió ${res.status}`);
+    return data.carousel;
+  }
+
+  async regenerateCarouselSlots(carouselId: string, slots: number[], what: 'image' | 'text' | 'compose' = 'image'): Promise<void> {
+    const res = await fetch(`${TTCHOP_SERVER_URL}/carousel/${carouselId}/regenerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: FIREBASE_PROJECT_ID, slots, what }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `regenerate respondió ${res.status}`);
+  }
+
+  async recomposeCarousel(carouselId: string): Promise<void> {
+    const res = await fetch(`${TTCHOP_SERVER_URL}/carousel/${carouselId}/recompose`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: FIREBASE_PROJECT_ID }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `recompose respondió ${res.status}`);
   }
 
   /**

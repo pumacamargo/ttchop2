@@ -5,6 +5,7 @@ export type ActiveTab =
   | 'dashboard'
   | 'products'
   | 'templates'
+  | 'carousels'  // TTC-56 — AI photo carousels
   | 'create'
   | 'calendar'
   | 'analytics'

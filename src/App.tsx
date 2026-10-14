@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ProductsView } from './components/ProductsView';
 import { SessionsView } from './components/SessionsView';
 import { TemplatesView } from './components/TemplatesView';
+import { CarouselsView } from './components/CarouselsView';
 import { MasterCreatorView } from './components/MasterCreatorView';
 import { VariationsMatrixView } from './components/VariationsMatrixView';
 import { OverlaysView } from './components/OverlaysView';
@@ -35,7 +36,7 @@ type ProjectsSubTab = 'ai' | 'edit' | 'overlay';
 
 // All valid tab values — must stay in sync with the ActiveTab union in navigation.ts
 const VALID_TABS: ActiveTab[] = [
-  'dashboard', 'products', 'templates', 'create', 'calendar',
+  'dashboard', 'products', 'templates', 'carousels', 'create', 'calendar',
   'analytics', 'brand', 'reports', 'editor', 'tools', 'sessions', 'renders', 'dev',
 ];
 
@@ -119,6 +120,7 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
     dashboard: t.nav_dashboard,
     products: t.nav_products,
     templates: t.nav_templates,
+    carousels: t.nav_carousels,
     create: t.nav_create,
     calendar: t.nav_calendar,
     analytics: t.nav_analytics,
@@ -173,12 +175,16 @@ function AppInner({ appLanguage, setAppLanguage }: { appLanguage: string; setApp
             <TemplatesView
               language={appLanguage}
               onLanguageChange={setAppLanguage}
-              onTemplateSelected={() => {
+              onTemplateSelected={(saved) => {
+                // Guardar un template de carrusel no tiene nada que ver con el flujo
+                // de Video AI — se queda en Templates en vez de saltar a 'create'.
+                if (saved.type === 'carousel_script' || saved.type === 'carousel_style') return;
                 navigateToTab('create');
                 setProjectsSubTab('ai');
               }}
             />
           )}
+          {activeTab === 'carousels' && <CarouselsView />}
           {activeTab === 'renders' && <WeeklyRendersView />}
           {activeTab === 'calendar' && <CalendarView />}
           {activeTab === 'analytics' && <AnalyticsView />}

@@ -13,6 +13,7 @@ import {
   Repeat2,
   LogOut,
   Terminal,
+  ImagePlus,
 } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
 import type { ActiveTab } from '../types/navigation';
@@ -68,6 +69,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({ isOpen, onClose, activeTab
     { tab: 'dashboard', label: t.nav_dashboard, icon: <LayoutDashboard size={19} /> },
     { tab: 'products', label: t.nav_products, icon: <Package size={19} /> },
     { tab: 'templates', label: t.nav_templates, icon: <FileText size={19} /> },
+    { tab: 'carousels', label: t.nav_carousels, icon: <ImagePlus size={19} /> },
     { tab: 'create', label: t.nav_create, icon: <Clapperboard size={19} /> },
     { tab: 'calendar', label: t.nav_calendar, icon: <CalendarDays size={19} /> },
     { tab: 'analytics', label: t.nav_analytics, icon: <BarChart3 size={19} /> },
