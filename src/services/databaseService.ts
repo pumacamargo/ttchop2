@@ -2422,91 +2422,18 @@ const CAROUSEL_DEFAULT_NEGATIVE =
   'photorealistic photo, no text, no typography, no letters, no words, no signage, no logos, no watermarks, not an illustration, not 3D render';
 
 const SEED_CAROUSEL_STYLES: Array<Omit<Template, 'id' | 'userId' | 'createdAt' | 'type'>> = [
-  {
-    title: 'Cinematic Concert Still',
-    description: 'Dramatic stage photography — spotlights, haze, bold condensed type. Alto impacto para hooks.',
-    visualBible: 'Cinematic concert photography, dramatic stage lighting cutting through haze, shallow depth of field, 35mm film grain, moody teal and magenta color grade, high contrast, handheld documentary energy',
-    imagePromptHints: "Translate each slide's idea into a dramatic concert or backstage photo metaphor — a stage, a spotlight, an instrument, haze, a silhouette.",
-    negative: CAROUSEL_DEFAULT_NEGATIVE,
-    layoutId: 'cinematic-concert-still',
-    typography: { weight: 400, case: 'uppercase', sizeScale: 1, tracking: 2, color: '#ffffff', accentColor: '#ff3df0', textPosition: 'bottom', background: 'gradient' },
-    aspect: '9:16',
-    seed: true,
-    seedVersion: CAROUSEL_SEED_VERSION,
-  },
-  {
-    title: 'Museum Exhibition System',
-    description: 'Minimalist gallery photography — objetos en pedestales, luz suave, tipografía serif clásica.',
-    visualBible: 'Minimalist museum exhibition photography, soft diffused gallery lighting, neutral beige and white tones, clean symmetrical composition, medium format film look, objects displayed on pedestals or plinths',
-    imagePromptHints: "Translate each slide's idea into an object or scene displayed like a museum exhibit — on a pedestal, under gallery lighting, with generous negative space.",
-    negative: CAROUSEL_DEFAULT_NEGATIVE,
-    layoutId: 'museum-exhibition-system',
-    typography: { weight: 500, case: 'none', sizeScale: 1, tracking: 0.5, color: '#2b2622', accentColor: '#8a7a5c', textPosition: 'bottom', background: 'band' },
-    aspect: '9:16',
-    seed: true,
-    seedVersion: CAROUSEL_SEED_VERSION,
-  },
-  {
-    title: 'Experimental Type Sculpture',
-    description: 'Formas geométricas abstractas, sombras duras, paleta monocromática. Layout llega en la Fase 5 — hoy usa Cinematic como fallback visual.',
-    visualBible: 'Abstract sculptural still life photography, bold geometric shapes and hard directional shadows, studio lighting, monochrome or duotone color palette, architectural forms',
-    imagePromptHints: "Translate each slide's idea into an abstract sculptural arrangement of geometric objects and shadows — no literal illustration, just form, light and shadow.",
-    negative: CAROUSEL_DEFAULT_NEGATIVE,
-    layoutId: 'experimental-type-sculpture',
-    typography: { weight: 700, case: 'uppercase', sizeScale: 1.1, tracking: 1, color: '#ffffff', accentColor: '#f5c518', textPosition: 'center', background: 'blur' },
-    aspect: '9:16',
-    seed: true,
-    seedVersion: CAROUSEL_SEED_VERSION,
-  },
-  {
-    title: 'Surreal Stage Architecture',
-    description: 'Arquitectura onírica, escaleras imposibles, paleta pastel. Layout llega en la Fase 5 — hoy usa Cinematic como fallback visual.',
-    visualBible: 'Surreal architectural photography, impossible staircases and oversized doorways, soft pastel color grade, dreamlike studio lighting, fine art photography aesthetic',
-    imagePromptHints: "Translate each slide's idea into a surreal architectural scene — an impossible structure, an oversized object, a dreamlike space that visually echoes the idea without literal illustration.",
-    negative: CAROUSEL_DEFAULT_NEGATIVE,
-    layoutId: 'surreal-stage-architecture',
-    typography: { weight: 400, case: 'none', sizeScale: 1, tracking: 0.5, color: '#2a2a2a', accentColor: '#c9a0dc', textPosition: 'top', background: 'none' },
-    aspect: '9:16',
-    seed: true,
-    seedVersion: CAROUSEL_SEED_VERSION,
-  },
-];
+  {"title": "Candid professional girls", "description": "Candid professional photos of clearly adult women (early 20s or older), Japanese or Latina depending on the language. Masterpiece editorial photography.", "visualBible": "Photorealistic candid professional portrait photography of clearly adult women, early 20s or older; Japanese women for Japanese-language content and Latina women for Spanish/English content. Natural candid moments, polished professional styling, authentic expressions, refined editorial lighting, masterpiece quality.", "imagePromptHints": "Depict a candid professional moment with clearly adult women (early 20s or older); choose Japanese or Latina adults to match the selected language. Connect the visual mood to the slide concept.", "negative": CAROUSEL_DEFAULT_NEGATIVE, "layoutId": "default", "typography": {"fontFamily": "Playfair", "weight": 500, "case": "none", "sizeScale": 1, "tracking": 0.5, "color": "#ffffff", "accentColor": "#d9b77e", "textPosition": "bottom", "background": "gradient"}, "aspect": "9:16", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+  {"title": "Candid professional boys", "description": "Candid professional photos of clearly adult men (early 20s or older), Japanese or Latino depending on the language. Masterpiece editorial photography.", "visualBible": "Photorealistic candid professional photography of clearly adult men, early 20s or older; Japanese men for Japanese-language content and Latino men for Spanish/English content. Natural candid moments, polished professional styling, authentic expressions, refined editorial lighting, masterpiece quality.", "imagePromptHints": "Depict a candid professional moment with clearly adult men (early 20s or older); choose Japanese or Latino adults to match the selected language. Connect the visual mood to the slide concept.", "negative": CAROUSEL_DEFAULT_NEGATIVE, "layoutId": "default", "typography": {"fontFamily": "Bebas Neue", "weight": 500, "case": "none", "sizeScale": 1, "tracking": 0.5, "color": "#ffffff", "accentColor": "#d9b77e", "textPosition": "bottom", "background": "gradient"}, "aspect": "9:16", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+  {"title": "Candid professional families", "description": "Candid professional photos of families with clearly adult parents, masterpiece editorial photography.", "visualBible": "Photorealistic candid professional family photography with clearly adult parents; Japanese families for Japanese-language content and Latino families for Spanish/English content. Warm authentic interaction, natural light, refined editorial composition, masterpiece quality.", "imagePromptHints": "Show a candid professional family scene with clearly adult parents; match Japanese or Latino cultural context to the selected language.", "negative": CAROUSEL_DEFAULT_NEGATIVE, "layoutId": "default", "typography": {"fontFamily": "Playfair", "weight": 500, "case": "none", "sizeScale": 1, "tracking": 0.5, "color": "#ffffff", "accentColor": "#d9b77e", "textPosition": "bottom", "background": "gradient"}, "aspect": "9:16", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+  {"title": "Professional landscapes", "description": "Professional landscape photography, masterpiece quality.", "visualBible": "Photorealistic professional landscape photography, deliberate composition, atmospheric natural light, rich but realistic colors, masterpiece quality.", "imagePromptHints": "Translate the slide idea into a striking professional landscape photograph; avoid people unless essential to the concept.", "negative": CAROUSEL_DEFAULT_NEGATIVE, "layoutId": "default", "typography": {"fontFamily": "Playfair", "weight": 500, "case": "none", "sizeScale": 1, "tracking": 0.5, "color": "#ffffff", "accentColor": "#d9b77e", "textPosition": "bottom", "background": "gradient"}, "aspect": "9:16", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+  {"title": "Artistic B-roll", "description": "Professional artistic B-roll photography, masterpiece quality.", "visualBible": "Photorealistic artistic B-roll, cinematic details, intentional framing, expressive light and shadow, tactile textures, professional masterpiece photography.", "imagePromptHints": "Create a professional artistic B-roll photograph that evokes the slide idea through detail, texture, light, or an evocative scene.", "negative": CAROUSEL_DEFAULT_NEGATIVE, "layoutId": "default", "typography": {"fontFamily": "Bebas Neue", "weight": 500, "case": "none", "sizeScale": 1, "tracking": 0.5, "color": "#ffffff", "accentColor": "#d9b77e", "textPosition": "bottom", "background": "gradient"}, "aspect": "9:16", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+] as any;
 
 const SEED_CAROUSEL_SCRIPTS: Array<Omit<Template, 'id' | 'userId' | 'createdAt' | 'type'>> = [
-  {
-    title: 'Lista 7 slides',
-    description: 'Formato lista enumerada: hook + N puntos accionables + cierre con CTA. El default recomendado (D3).',
-    content: 'Formato lista enumerada. Slide 1 = hook que detiene el scroll (pregunta provocadora o afirmación fuerte). Slides 2 a N-1 = un punto de la lista por slide, cada uno autocontenido y accionable. Último slide = cierre con llamada a guardar o seguir.',
-    slideCount: { min: 5, max: 10, default: 7 },
-    roles: ['hook', 'body', 'body', 'body', 'body', 'body', 'cta'],
-    maxCharsPerSlide: 140,
-    captionStyle: 'Corto (1-2 líneas), tono directo, 3-5 hashtags relevantes al tema.',
-    seed: true,
-    seedVersion: CAROUSEL_SEED_VERSION,
-  },
-  {
-    title: 'Mito vs. Realidad',
-    description: 'Formato mito vs realidad: contrapone creencias comunes contra la realidad, slide por slide.',
-    content: "Formato mito vs realidad. Slide 1 = hook planteando que hay creencias equivocadas sobre el tema. Slides siguientes alternan: 'Mito: ...' seguido de 'Realidad: ...' (pueden ir en el mismo slide o en slides consecutivos). Último slide = cierre con CTA de guardar/seguir.",
-    slideCount: { min: 6, max: 9, default: 7 },
-    roles: ['hook', 'body', 'body', 'body', 'body', 'body', 'cta'],
-    maxCharsPerSlide: 160,
-    captionStyle: 'Medio, tono que genera curiosidad, 3-5 hashtags.',
-    seed: true,
-    seedVersion: CAROUSEL_SEED_VERSION,
-  },
-  {
-    title: 'Cosas que nadie te dice',
-    description: 'Formato confesional/insider: revela una cosa poco conocida por slide, tono cercano.',
-    content: "Formato confesional/insider. Slide 1 = hook tipo '[N] cosas que nadie te dice sobre [tema]'. Cada slide siguiente revela UNA cosa poco conocida o contraintuitiva, en tono cercano y directo, como si un amigo te contara un secreto. Último slide = CTA de guardar/seguir.",
-    slideCount: { min: 5, max: 8, default: 6 },
-    roles: ['hook', 'body', 'body', 'body', 'body', 'cta'],
-    maxCharsPerSlide: 150,
-    captionStyle: 'Tono personal/confesional, 1 pregunta al final para generar comentarios, 3-5 hashtags.',
-    seed: true,
-    seedVersion: CAROUSEL_SEED_VERSION,
-  },
-];
+  {"title": "Recomendación Libros/Películas/TV/Recetas", "description": "Recomienda y convence de leer, ver o cocinar algo con razones concretas.", "content": "Write every slide in the selected language (es, en, or ja); never mix languages. Use roles hook, body, and cta. Slide 1 hook teases a compelling recommendation. Each body slide presents one book, film, TV show, or recipe with a specific persuasive reason to try it; do not invent facts. Final cta invites saving, sharing, or trying it.", "slideCount": {"min": 5, "max": 9, "default": 7}, "roles": ["hook", "body", "body", "body", "body", "body", "cta"], "maxCharsPerSlide": 160, "captionStyle": "Concise, language-matched caption with a relevant question and 3-5 topic hashtags.", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+  {"title": "Problem + Fix (Menopause / Sleep Problems / Low Energy)", "description": "Del mito o problema a una solución práctica, un consejo claro por slide.", "content": "Write all slides in the selected language (es, en, or ja); never mix languages. Use roles hook, body, and cta. Slide 1 hook identifies a relatable problem or challenges a common myth. Each body slide gives exactly one practical, low-risk tip; avoid diagnosis, guarantees, or replacing professional care. Final cta invites saving or sharing.", "slideCount": {"min": 5, "max": 9, "default": 7}, "roles": ["hook", "body", "body", "body", "body", "body", "cta"], "maxCharsPerSlide": 160, "captionStyle": "Concise, language-matched caption with a relevant question and 3-5 topic hashtags.", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+  {"title": "Lista o Ranking con opiniones", "description": "Lista o ranking con una opinión propia y un elemento por slide.", "content": "Write all slides in the selected language (es, en, or ja); never mix languages. Use roles hook, body, and cta. Slide 1 hook introduces the list/ranking and a clear point of view. Each body slide covers exactly one item with a concise opinion and specific reason; order consistently and do not fabricate factual claims. Final cta invites comments or saves.", "slideCount": {"min": 5, "max": 10, "default": 7}, "roles": ["hook", "body", "body", "body", "body", "body", "cta"], "maxCharsPerSlide": 150, "captionStyle": "Concise, language-matched caption with a relevant question and 3-5 topic hashtags.", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+] as any;
 
 // Documentos guardados en Firestore antes de la migración a `videos[]` todavía tienen el
 // campo viejo `bRolls[]` (sin section/source/trim). Se normalizan al leerlos para no romper la UI.
