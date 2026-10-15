@@ -3581,14 +3581,13 @@ class DatabaseService {
   private async carouselRequest(path: string, method: 'GET' | 'POST' | 'DELETE', body: Record<string, unknown> = {}, accountId: string | null = null) {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
-    const token = await user.getIdToken(); // transient, never persisted
     const scope = { projectId: FIREBASE_PROJECT_ID, accountId };
-    const query = new URLSearchParams({ projectId: scope.projectId, accountId: accountId || '' });
+    const query = new URLSearchParams({ projectId: scope.projectId, accountId: accountId || '', userId: user.uid });
     const url = `${TTCHOP_SERVER_URL}/carousel${path}${method === 'GET' ? `?${query}` : ''}`;
     const res = await fetch(url, {
       method,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      ...(method !== 'GET' ? { body: JSON.stringify({ ...body, ...scope }) } : {}),
+      headers: { 'Content-Type': 'application/json' },
+      ...(method !== 'GET' ? { body: JSON.stringify({ ...body, ...scope, userId: user.uid }) } : {}),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `Carousel respondió ${res.status}`);
