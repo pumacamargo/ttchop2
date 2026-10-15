@@ -3577,26 +3577,36 @@ class DatabaseService {
     await deleteDoc(doc(firestore, 'renders', id));
   }
 
-  // ── Carousels (TTC-56 Fase 4) ──────────────────────────────────────────────
-  // El cliente SOLO lee/borra directo a Firestore. Crear, aprobar texto, regenerar
-  // y recomponer pasan SIEMPRE por ttchop-server (admin SDK) — ver firestore.rules.
-  async getCarousels(): Promise<Carousel[]> {
+  // Carousel documents contain a server-only callback secret: never read Firestore directly.
+  private async carouselRequest(path: string, method: 'GET' | 'POST' | 'DELETE', body: Record<string, unknown> = {}, accountId: string | null = null) {
     const user = auth.currentUser;
-    if (!user) return [];
-    const q = query(collection(firestore, 'carousels'), where('userId', '==', user.uid));
-    const snap = await getDocs(q);
-    return snap.docs
-      .map(d => ({ id: d.id, ...d.data() } as Carousel))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    if (!user) throw new Error('Not authenticated');
+    const token = await user.getIdToken(); // transient, never persisted
+    const scope = { projectId: FIREBASE_PROJECT_ID, accountId };
+    const query = new URLSearchParams({ projectId: scope.projectId, accountId: accountId || '' });
+    const url = `${TTCHOP_SERVER_URL}/carousel${path}${method === 'GET' ? `?${query}` : ''}`;
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      ...(method !== 'GET' ? { body: JSON.stringify({ ...body, ...scope }) } : {}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Carousel respondió ${res.status}`);
+    return data;
   }
 
-  async getCarousel(carouselId: string): Promise<Carousel | null> {
-    const snap = await getDoc(doc(firestore, 'carousels', carouselId));
-    return snap.exists() ? ({ id: snap.id, ...snap.data() } as Carousel) : null;
+  async getCarousels(accountId: string | null = null): Promise<Carousel[]> {
+    const data = await this.carouselRequest('', 'GET', {}, accountId);
+    return (data.carousels as Carousel[]).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
-  async deleteCarousel(carouselId: string): Promise<void> {
-    await deleteDoc(doc(firestore, 'carousels', carouselId));
+  async getCarousel(carouselId: string, accountId: string | null = null): Promise<Carousel | null> {
+    const data = await this.carouselRequest(`/${encodeURIComponent(carouselId)}`, 'GET', {}, accountId);
+    return data.carousel;
+  }
+
+  async deleteCarousel(carouselId: string, accountId: string | null = null): Promise<void> {
+    await this.carouselRequest(`/${encodeURIComponent(carouselId)}`, 'DELETE', {}, accountId);
   }
 
   async createCarousel(params: {
@@ -3610,52 +3620,20 @@ class DatabaseService {
     dryRun?: boolean;
     autoApprove?: boolean;
   }): Promise<{ carouselId: string; carousel: Carousel }> {
-    const user = auth.currentUser;
-    if (!user) throw new Error('Not authenticated');
-
-    const res = await fetch(`${TTCHOP_SERVER_URL}/carousel/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: user.uid,
-        projectId: FIREBASE_PROJECT_ID,
-        ...stripUndefined(params),
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `carousel/create respondió ${res.status}`);
-    return data;
+    return this.carouselRequest('/create', 'POST', stripUndefined(params), params.accountId || null);
   }
 
-  async approveCarouselText(carouselId: string, edits?: { slides?: { index: number; text?: string; imagePrompt?: string }[]; caption?: string }): Promise<Carousel> {
-    const res = await fetch(`${TTCHOP_SERVER_URL}/carousel/${carouselId}/approve-text`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId: FIREBASE_PROJECT_ID, ...edits }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `approve-text respondió ${res.status}`);
+  async approveCarouselText(carouselId: string, edits?: { slides?: { index: number; text?: string; imagePrompt?: string }[]; caption?: string }, accountId: string | null = null): Promise<Carousel> {
+    const data = await this.carouselRequest(`/${encodeURIComponent(carouselId)}/approve-text`, 'POST', edits || {}, accountId);
     return data.carousel;
   }
 
-  async regenerateCarouselSlots(carouselId: string, slots: number[], what: 'image' | 'text' | 'compose' = 'image'): Promise<void> {
-    const res = await fetch(`${TTCHOP_SERVER_URL}/carousel/${carouselId}/regenerate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId: FIREBASE_PROJECT_ID, slots, what }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `regenerate respondió ${res.status}`);
+  async regenerateCarouselSlots(carouselId: string, slots: number[], what: 'image' | 'text' | 'compose' = 'image', accountId: string | null = null): Promise<void> {
+    await this.carouselRequest(`/${encodeURIComponent(carouselId)}/regenerate`, 'POST', { slots, what }, accountId);
   }
 
-  async recomposeCarousel(carouselId: string): Promise<void> {
-    const res = await fetch(`${TTCHOP_SERVER_URL}/carousel/${carouselId}/recompose`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId: FIREBASE_PROJECT_ID }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `recompose respondió ${res.status}`);
+  async recomposeCarousel(carouselId: string, accountId: string | null = null): Promise<void> {
+    await this.carouselRequest(`/${encodeURIComponent(carouselId)}/recompose`, 'POST', {}, accountId);
   }
 
   /**

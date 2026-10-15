@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { db } from '../services/databaseService';
 import type { Carousel, Template } from '../services/databaseService';
+import { useContainer } from '../context/ContainerContext';
 import {
   Plus, RefreshCw, Copy, Download, Trash2, AlertTriangle, CheckCircle, Clock,
   ImagePlus, ArrowLeft, Sparkles,
@@ -45,7 +46,8 @@ const CarouselDetail: React.FC<{
   onBack: () => void;
   onDelete: (id: string) => void;
   onChanged: () => void;
-}> = ({ carousel, onBack, onDelete, onChanged }) => {
+  accountId: string | null;
+}> = ({ carousel, onBack, onDelete, onChanged, accountId }) => {
   const [editedSlides, setEditedSlides] = useState(carousel.slides.map(s => ({ index: s.index, text: s.text, imagePrompt: s.imagePrompt })));
   const [editedCaption, setEditedCaption] = useState(carousel.caption);
   const [busy, setBusy] = useState(false);
@@ -65,7 +67,7 @@ const CarouselDetail: React.FC<{
     setBusy(true);
     setError('');
     try {
-      await db.approveCarouselText(carousel.id, { slides: editedSlides, caption: editedCaption });
+      await db.approveCarouselText(carousel.id, { slides: editedSlides, caption: editedCaption }, accountId);
       onChanged();
     } catch (err: any) {
       setError(err.message || 'Failed to approve text');
@@ -78,7 +80,7 @@ const CarouselDetail: React.FC<{
     setRegeneratingIdx(index);
     setError('');
     try {
-      await db.regenerateCarouselSlots(carousel.id, [index], 'image');
+      await db.regenerateCarouselSlots(carousel.id, [index], 'image', accountId);
       onChanged();
     } catch (err: any) {
       setError(err.message || 'Failed to regenerate slide');
@@ -97,8 +99,14 @@ const CarouselDetail: React.FC<{
 
   const handleDelete = async () => {
     setBusy(true);
-    await db.deleteCarousel(carousel.id);
-    onDelete(carousel.id);
+    try {
+      await db.deleteCarousel(carousel.id, accountId);
+      onDelete(carousel.id);
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete carousel');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const estimatedCredits = carousel.cost?.credits || 0;
@@ -286,7 +294,8 @@ const NewCarouselForm: React.FC<{
   styleTemplates: Template[];
   onCreated: (carousel: Carousel) => void;
   onCancel: () => void;
-}> = ({ scriptTemplates, styleTemplates, onCreated, onCancel }) => {
+  accountId: string | null;
+}> = ({ scriptTemplates, styleTemplates, onCreated, onCancel, accountId }) => {
   const [script, setScript] = useState('');
   const [scriptTemplateId, setScriptTemplateId] = useState(scriptTemplates[0]?.id || '');
   const [styleTemplateId, setStyleTemplateId] = useState(styleTemplates[0]?.id || '');
@@ -311,6 +320,7 @@ const NewCarouselForm: React.FC<{
     try {
       const { carousel } = await db.createCarousel({
         script,
+        accountId: accountId || undefined,
         scriptTemplateId,
         styleTemplateId,
         language,
@@ -412,6 +422,8 @@ const NewCarouselForm: React.FC<{
 
 // ── Vista principal ──────────────────────────────────────────────────────────
 export const CarouselsView: React.FC = () => {
+  const { activeAccountId } = useContainer();
+  const loadVersion = useRef(0);
   const [carousels, setCarousels] = useState<Carousel[]>([]);
   const [scriptTemplates, setScriptTemplates] = useState<Template[]>([]);
   const [styleTemplates, setStyleTemplates] = useState<Template[]>([]);
@@ -420,19 +432,21 @@ export const CarouselsView: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
+    const requestId = ++loadVersion.current;
     if (!silent) setLoading(true);
     const [cs, scripts, styles] = await Promise.all([
-      db.getCarousels(),
+      db.getCarousels(activeAccountId),
       db.getTemplatesByType('carousel_script'),
       db.getTemplatesByType('carousel_style'),
     ]);
+    if (requestId !== loadVersion.current) return;
     setCarousels(cs);
     setScriptTemplates(scripts);
     setStyleTemplates(styles);
     if (!silent) setLoading(false);
-  }, []);
+  }, [activeAccountId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setSelectedId(null); load(); return () => { loadVersion.current++; }; }, [load]);
 
   // Poll mientras haya algo en vuelo — mismo patrón que RendersView (sin onSnapshot,
   // consistente con el resto del código).
@@ -443,7 +457,8 @@ export const CarouselsView: React.FC = () => {
     return () => clearInterval(interval);
   }, [carousels, load]);
 
-  const selected = selectedId ? carousels.find(c => c.id === selectedId) || null : null;
+  const visibleCarousels = carousels.filter(c => (c.accountId || null) === activeAccountId);
+  const selected = selectedId ? visibleCarousels.find(c => c.id === selectedId) || null : null;
 
   const handleDelete = (id: string) => {
     setCarousels(prev => prev.filter(c => c.id !== id));
@@ -453,6 +468,7 @@ export const CarouselsView: React.FC = () => {
   if (selected) {
     return (
       <CarouselDetail
+        accountId={activeAccountId}
         carousel={selected}
         onBack={() => setSelectedId(null)}
         onDelete={handleDelete}
@@ -477,6 +493,7 @@ export const CarouselsView: React.FC = () => {
 
       {showForm && (
         <NewCarouselForm
+          accountId={activeAccountId}
           scriptTemplates={scriptTemplates}
           styleTemplates={styleTemplates}
           onCreated={(carousel) => { setShowForm(false); setCarousels(prev => [carousel, ...prev]); setSelectedId(carousel.id); }}
@@ -488,14 +505,14 @@ export const CarouselsView: React.FC = () => {
         <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
           <RefreshCw size={24} className="loading-spinner" style={{ marginBottom: '0.5rem' }} />
         </div>
-      ) : carousels.length === 0 ? (
+      ) : visibleCarousels.length === 0 ? (
         <div className="glass-card" style={{ textAlign: 'center', padding: '2.5rem 1rem', color: 'var(--text-muted)' }}>
           <ImagePlus size={28} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
           <p style={{ margin: 0, fontSize: '0.85rem' }}>No carousels yet.</p>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-          {carousels.map(c => {
+          {visibleCarousels.map(c => {
             const coverUrl = c.slides?.[0]?.final?.url || c.slides?.[0]?.bg?.url;
             return (
               <div key={c.id} className="glass-card" style={{ cursor: 'pointer', display: 'flex', gap: '0.75rem', padding: '0.85rem' }} onClick={() => setSelectedId(c.id)}>

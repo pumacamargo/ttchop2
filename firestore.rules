@@ -42,14 +42,10 @@ service cloud.firestore {
         (request.auth.uid == resource.data.userId || request.resource.data.keys().hasOnly(['status', 'videoUrl', 'updatedAt']));
     }
 
-    // Carousels (TTC-56) — el cliente SOLO lee y borra sus propios carruseles. Todo
-    // lo demás (create, status, slides, callbackToken) lo escribe ttchop-server con
-    // el admin SDK (routes/carousel.js), que bypassa estas reglas igual que n8n en
-    // renders arriba — bloquear create/update acá evita que el cliente escriba un
-    // carrusel a mano por error, no protege contra el propio server.
+    // callbackToken lives in the document: even owner reads must go through the
+    // authenticated server, which strips it and enforces account isolation.
     match /carousels/{document=**} {
-      allow read, delete: if request.auth != null && request.auth.uid == resource.data.userId;
-      allow create, update: if false;
+      allow read, write: if false;
     }
 
     // User preferences (timezone, etc.) — each user owns their own doc
