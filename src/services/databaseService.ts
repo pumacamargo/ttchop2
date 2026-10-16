@@ -2671,10 +2671,7 @@ class DatabaseService {
     // Versionar la marca local permite que usuarios con la clave v1 vuelvan a consultar
     // Firestore; la detección por seedKey hace el backfill sin reescribir sus templates.
     const seededKey = `ttchop_seeded_carousel_${uid}_v${CAROUSEL_SEED_VERSION}`;
-    if (localStorage.getItem(seededKey)) {
-      this.seededCarouselUsers.add(uid);
-      return;
-    }
+    const hasVersionMarker = Boolean(localStorage.getItem(seededKey));
 
     // Un solo where() + filtro en JS evita depender de un índice compuesto nuevo.
     const q = query(collection(firestore, 'templates'), where('userId', '==', uid));
@@ -2685,7 +2682,7 @@ class DatabaseService {
       ...SEED_CAROUSEL_STYLES.map(t => ({ ...t, type: 'carousel_style' as TemplateType })),
       ...SEED_CAROUSEL_SCRIPTS.map(t => ({ ...t, type: 'carousel_script' as TemplateType })),
     ].map(t => t.seedKey ? { ...t, id: `seed_${uid}_${t.seedKey}` } : t);
-    const missingEntries = planCarouselSeedWrites(existingDocs, seedEntries);
+    const missingEntries = planCarouselSeedWrites(existingDocs, seedEntries, hasVersionMarker);
 
     if (missingEntries.length > 0) {
       console.log('Seeding missing carousel templates for user: ', uid);

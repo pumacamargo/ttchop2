@@ -28,6 +28,10 @@ test('backfills the new story seed without duplicating existing carousel seeds',
   assert.deepEqual(planCarouselSeedWrites(existingDocs, [originalStyle, oldScript, newScript]), [newScript]);
 });
 
+test('backfills the stable seed when the v2 marker exists but its document is absent', () => {
+  assert.deepEqual(planCarouselSeedWrites(existingDocs, [originalStyle, oldScript, newScript], true), [newScript]);
+});
+
 test('seeds every default for a user who has no carousel seeds yet', () => {
   const unrelatedTemplate = { id: 'collage-id', data: { type: 'collage', seed: true } };
   assert.deepEqual(planCarouselSeedWrites([unrelatedTemplate], [originalStyle, oldScript, newScript]), [originalStyle, oldScript, newScript]);

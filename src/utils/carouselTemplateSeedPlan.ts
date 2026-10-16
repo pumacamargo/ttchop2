@@ -24,12 +24,13 @@ export interface CarouselSeedEntry {
 export function planCarouselSeedWrites<T extends CarouselSeedEntry>(
   existingDocs: CarouselSeedDocument[],
   seedEntries: T[],
+  onlyKeyedSeeds = false,
 ): T[] {
   const hasCarouselSeed = existingDocs.some(({ data }) =>
     data.seed === true && (data.type === 'carousel_script' || data.type === 'carousel_style'),
   );
 
-  const candidates = hasCarouselSeed
+  const candidates = hasCarouselSeed || onlyKeyedSeeds
     ? seedEntries.filter(entry => Boolean(entry.seedKey))
     : seedEntries;
 
