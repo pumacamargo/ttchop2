@@ -11,6 +11,7 @@ import {
   getDoc,
   deleteDoc,
   writeBatch,
+  runTransaction,
   arrayRemove,
   arrayUnion,
   deleteField,
@@ -20,6 +21,7 @@ import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, listAll, delete
 import type { ParsedAnalyticsOrder } from './analyticsImport';
 
 import * as XLSX from 'xlsx';
+import { planCarouselSeedWrites } from '../utils/carouselTemplateSeedPlan';
 // Pure, framework-free filtering logic lives in utils so every view can unit test it without
 // pulling in Firebase — re-exported here so callers of this service don't need a second import.
 export { getVisibleForContainer, isGeneralContainer, getEffectiveContainer } from '../utils/containerVisibility';
@@ -136,6 +138,7 @@ export interface Template {
   // actualizar el catálogo de defaults sin pisar ediciones que el usuario ya haya hecho.
   seed?: boolean;
   seedVersion?: number;
+  seedKey?: string;
   // carousel_script (plan §5): instrucción de estructura narrativa para el LLM.
   slideCount?: { min: number; max: number; default: number };
   roles?: string[]; // ej. ['hook','body','body','body','cta']
@@ -2408,12 +2411,10 @@ FINAL WRITING RULES
 ];
 
 // ── Carousel templates (TTC-56 Fase 3) ──────────────────────────────────────────
-// Sembrados por separado de SEED_TEMPLATES (ver seedCarouselTemplates): a diferencia
-// del seed general, que solo corre si el usuario no tiene NINGÚN template, este
-// backfillea usuarios existentes (como Arturo) que ya tenían templates de otros tipos
-// antes de que existiera esta feature. seed:true + seedVersion permiten en el futuro
-// re-sembrar/actualizar los defaults sin pisar templates que el usuario ya editó.
-const CAROUSEL_SEED_VERSION = 1;
+// Sembrados por separado de SEED_TEMPLATES para poder añadir defaults a usuarios existentes.
+// seedVersion informa la versión del catálogo; seedKey habilita backfills aditivos e
+// idempotentes. La siembra nunca sobrescribe documentos existentes, incluidos los editados.
+const CAROUSEL_SEED_VERSION = 2;
 
 // Negative obligatorio del plan TTC-55 §0: fotos realistas, nunca texto/logos/marca
 // de agua dentro de la imagen generada — el texto del slide SIEMPRE va como overlay
@@ -2433,6 +2434,18 @@ const SEED_CAROUSEL_SCRIPTS: Array<Omit<Template, 'id' | 'userId' | 'createdAt' 
   {"title": "Recomendación Libros/Películas/TV/Recetas", "description": "Recomienda y convence de leer, ver o cocinar algo con razones concretas.", "content": "Write every slide in the selected language (es, en, or ja); never mix languages. Use roles hook, body, and cta. Slide 1 hook teases a compelling recommendation. Each body slide presents one book, film, TV show, or recipe with a specific persuasive reason to try it; do not invent facts. Final cta invites saving, sharing, or trying it.", "slideCount": {"min": 5, "max": 9, "default": 7}, "roles": ["hook", "body", "body", "body", "body", "body", "cta"], "maxCharsPerSlide": 160, "captionStyle": "Concise, language-matched caption with a relevant question and 3-5 topic hashtags.", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
   {"title": "Problem + Fix (Menopause / Sleep Problems / Low Energy)", "description": "Del mito o problema a una solución práctica, un consejo claro por slide.", "content": "Write all slides in the selected language (es, en, or ja); never mix languages. Use roles hook, body, and cta. Slide 1 hook identifies a relatable problem or challenges a common myth. Each body slide gives exactly one practical, low-risk tip; avoid diagnosis, guarantees, or replacing professional care. Final cta invites saving or sharing.", "slideCount": {"min": 5, "max": 9, "default": 7}, "roles": ["hook", "body", "body", "body", "body", "body", "cta"], "maxCharsPerSlide": 160, "captionStyle": "Concise, language-matched caption with a relevant question and 3-5 topic hashtags.", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
   {"title": "Lista o Ranking con opiniones", "description": "Lista o ranking con una opinión propia y un elemento por slide.", "content": "Write all slides in the selected language (es, en, or ja); never mix languages. Use roles hook, body, and cta. Slide 1 hook introduces the list/ranking and a clear point of view. Each body slide covers exactly one item with a concise opinion and specific reason; order consistently and do not fabricate factual claims. Final cta invites comments or saves.", "slideCount": {"min": 5, "max": 10, "default": 7}, "roles": ["hook", "body", "body", "body", "body", "body", "cta"], "maxCharsPerSlide": 150, "captionStyle": "Concise, language-matched caption with a relevant question and 3-5 topic hashtags.", "seed": true, "seedVersion": CAROUSEL_SEED_VERSION},
+  {
+    title: 'Confesión y giro de revancha',
+    description: 'Relato en primera persona con agravio, escalada y un giro satisfactorio en siete slides.',
+    content: `Write every slide in the selected language (es, en, or ja); never mix languages. Create an original anonymous first-person confession inspired only by the premise of a public story; do not copy wording or present events as verified. Keep slide text and caption story-only: do not mention Reddit, subreddit names, usernames, author handles, or fiction labels, and never claim the events are real. Use exactly seven slides with roles hook, body, body, body, body, body, body. Slide 1 begins directly with the narrative hook, with no separate cover title. Slides 2-6 establish the protagonist and stakes, reveal an injustice, secret, or betrayal, escalate the consequences, show the protagonist's response or evidence, and build tension. Slide 7 delivers the reversal and satisfying resolution; do not replace the ending with a CTA slide. Keep each slide medium-short (up to 160 characters), concrete, causally connected, and consistent about character details. Never include identifying personal information or invent an author.`,
+    slideCount: { min: 7, max: 7, default: 7 },
+    roles: ['hook', 'body', 'body', 'body', 'body', 'body', 'body'],
+    maxCharsPerSlide: 160,
+    captionStyle: 'Short caption in the selected language; an optional natural question/CTA and 3-5 relevant hashtags. No source or fiction labels.',
+    seed: true,
+    seedVersion: CAROUSEL_SEED_VERSION,
+    seedKey: 'carousel_script_reddit_confession_v1',
+  },
 ] as any;
 
 // Documentos guardados en Firestore antes de la migración a `videos[]` todavía tienen el
@@ -2638,12 +2651,9 @@ class DatabaseService {
     localStorage.setItem(seededKey, 'true');
   }
 
-  // TTC-56 Fase 3 — siembra los 4 estilos + 3 guiones de carrusel. A propósito
-  // SEPARADA de seedUserDatabaseInner: esa solo corre si el usuario no tiene NINGÚN
-  // template (así que nunca backfillearía a un usuario existente como Arturo, que ya
-  // tenía templates de otros tipos antes de esta feature). Esta en cambio solo revisa
-  // si YA hay templates de tipo carousel_script/carousel_style con seed:true, y si no
-  // hay ninguno, los crea — funciona igual para un usuario nuevo o uno viejo.
+  // TTC-56 Fase 3 — añade defaults faltantes y backfillea nuevas seeds en cuentas existentes.
+  // Las seeds con seedKey usan IDs estables y transacciones create-if-absent: una edición
+  // del usuario nunca se reemplaza, y abrir varias pestañas no duplica la plantilla nueva.
   async seedCarouselTemplates(uid: string): Promise<void> {
     const inFlight = this.carouselSeedingPromises.get(uid);
     if (inFlight) return inFlight;
@@ -2658,43 +2668,46 @@ class DatabaseService {
   private async seedCarouselTemplatesInner(uid: string): Promise<void> {
     if (this.seededCarouselUsers.has(uid)) return;
 
-    const seededKey = `ttchop_seeded_carousel_${uid}`;
-    if (localStorage.getItem(seededKey)) {
-      this.seededCarouselUsers.add(uid);
-      return;
-    }
+    // Versionar la marca local permite que usuarios con la clave v1 vuelvan a consultar
+    // Firestore; la detección por seedKey hace el backfill sin reescribir sus templates.
+    const seededKey = `ttchop_seeded_carousel_${uid}_v${CAROUSEL_SEED_VERSION}`;
+    const hasVersionMarker = Boolean(localStorage.getItem(seededKey));
 
-    // Un solo where() + filtro en JS, mismo patrón cauteloso que el resto del archivo
-    // (ver "Single-field query" en pipeline/scheduler.js del lado servidor) — evita
-    // depender de un índice compuesto nuevo que no existe todavía en producción.
+    // Un solo where() + filtro en JS evita depender de un índice compuesto nuevo.
     const q = query(collection(firestore, 'templates'), where('userId', '==', uid));
     const snap = await getDocs(q);
-    const hasCarouselSeed = snap.docs.some(d => {
-      const data = d.data();
-      return data.seed === true && (data.type === 'carousel_script' || data.type === 'carousel_style');
-    });
+    const existingDocs = snap.docs.map(d => ({ id: d.id, data: d.data() }));
 
-    if (hasCarouselSeed) {
-      this.seededCarouselUsers.add(uid);
-      localStorage.setItem(seededKey, 'true');
-      return;
-    }
-
-    console.log('Seeding carousel templates for user: ', uid);
-
-    const seedEntries = [
+    const seedEntries: Array<Omit<Template, 'id' | 'userId' | 'createdAt'> & { id?: string }> = [
       ...SEED_CAROUSEL_STYLES.map(t => ({ ...t, type: 'carousel_style' as TemplateType })),
       ...SEED_CAROUSEL_SCRIPTS.map(t => ({ ...t, type: 'carousel_script' as TemplateType })),
-    ];
+    ].map(t => t.seedKey ? { ...t, id: `seed_${uid}_${t.seedKey}` } : t);
+    const missingEntries = planCarouselSeedWrites(existingDocs, seedEntries, hasVersionMarker);
 
-    for (const t of seedEntries) {
-      const tempId = `temp_${Math.random().toString(36).substring(2, 9)}`;
-      await setDoc(doc(firestore, 'templates', tempId), stripUndefined({
+    if (missingEntries.length > 0) {
+      console.log('Seeding missing carousel templates for user: ', uid);
+    }
+
+    for (const t of missingEntries) {
+      const tempId = t.id ?? `temp_${Math.random().toString(36).substring(2, 9)}`;
+      const templateRef = doc(firestore, 'templates', tempId);
+      const templateData = stripUndefined({
         ...t,
         id: tempId,
         userId: uid,
         createdAt: new Date().toISOString(),
-      }));
+      });
+
+      if (t.seedKey) {
+        // A stable doc ID + transaction is an idempotent create-if-absent. If a user
+        // already edited this seed, the transaction observes it and leaves it untouched.
+        await runTransaction(firestore, async transaction => {
+          const existing = await transaction.get(templateRef);
+          if (!existing.exists()) transaction.set(templateRef, templateData);
+        });
+      } else {
+        await setDoc(templateRef, templateData);
+      }
     }
 
     this.seededCarouselUsers.add(uid);
