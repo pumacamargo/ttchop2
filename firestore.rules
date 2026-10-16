@@ -15,6 +15,13 @@ service cloud.firestore {
       allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
     }
 
+    // The client checks one stable Reddit confession seed before creating it. Permit
+    // only that user's missing document lookup; existing documents still require ownership.
+    match /templates/{templateId} {
+      allow get: if request.auth != null && resource == null &&
+        templateId == 'seed_' + request.auth.uid + '_carousel_script_reddit_confession_v1';
+    }
+
     // Allow authenticated users to read/write their own master_videos
     match /master_videos/{document=**} {
       allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
