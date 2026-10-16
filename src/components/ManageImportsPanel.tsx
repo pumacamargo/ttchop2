@@ -13,6 +13,7 @@ import {
   Trash2, AlertTriangle, Archive, BarChart2, CheckCircle2,
 } from 'lucide-react';
 import { db } from '../services/databaseService';
+import { referenceProvenance } from '../utils/salesProvenance';
 import type { ImportRecord, ImportType, AnalyticsOrder, TikTokVideoStats } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
@@ -324,10 +325,11 @@ const ImportRow: React.FC<{
   onDelete: () => void;
   t: Translations;
 }> = ({ record, accounts, busy, error, onContainerChange, onDelete, t }) => {
-  const TypeIcon = record.type === 'sales_file' ? FileSpreadsheet : VideoIcon;
-  const typeLabel = record.type === 'sales_file' ? t.manage_imports_type_sales_file : t.manage_imports_type_studio_scrape;
+  const TypeIcon = record.type === 'studio_scrape' ? VideoIcon : FileSpreadsheet;
+  const typeLabel = record.type === 'sales_reference' ? t.analytics_reference_title : record.type === 'sales_file' ? t.manage_imports_type_sales_file : t.manage_imports_type_studio_scrape;
   const countLabel = record.type === 'sales_file'
     ? t.manage_imports_item_count_orders.replace('{count}', String(record.itemCount))
+    : record.type === 'sales_reference' ? t.analytics_reference_rows.replace('{count}', String(record.itemCount))
     : t.manage_imports_item_count_videos.replace('{count}', String(record.itemCount));
 
   return (
@@ -351,6 +353,14 @@ const ImportRow: React.FC<{
             {record.label}
           </p>
           <p style={{ margin: '0.15rem 0 0', fontSize: '0.68rem', color: 'var(--text-muted)' }}>{countLabel}</p>
+          {record.type === 'sales_reference' && (
+            <p style={{ margin: '0.15rem 0 0', fontSize: '0.72rem', color: 'var(--warning)' }}>
+              {referenceProvenance(record) === 'external' ? t.analytics_reference_source_named.replace('{source}', record.sourceLabel!.trim()) : t.analytics_reference_unverified}
+            </p>
+          )}
+          {record.type === 'sales_file' && <p style={{ margin: '0.15rem 0 0', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            {record.sourceKind === 'own' ? t.analytics_own_title : t.analytics_legacy_sales_hint}
+          </p>}
           {record.tiktokUsername && (
             <p style={{ margin: '0.15rem 0 0', fontSize: '0.68rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
               {t.manage_imports_source_hint.replace('{username}', record.tiktokUsername)}
@@ -377,6 +387,7 @@ const ImportRow: React.FC<{
         </select>
         {busy && <RefreshCw size={13} className="loading-spinner" style={{ color: 'var(--primary)' }} />}
       </div>
+      {record.type === 'sales_reference' && <p style={{ margin: 0, fontSize: '0.68rem', color: 'var(--text-muted)' }}>{t.analytics_container_not_source}</p>}
       {error && <p style={{ margin: 0, fontSize: '0.7rem', color: 'var(--danger)' }}>{error}</p>}
     </div>
   );
