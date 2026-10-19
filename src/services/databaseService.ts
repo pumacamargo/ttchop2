@@ -347,6 +347,7 @@ export interface AnalyticsOrder extends ParsedAnalyticsOrder {
 // predate this collection have no `importId` pointing at one, and keep resolving their container
 // from their own (legacy) `accountId` field — see getEffectiveContainer() in containerVisibility.ts.
 export type ImportType = 'sales_file' | 'studio_scrape' | 'sales_reference';
+export type SalesSourceKind = 'own' | 'external';
 
 export interface ImportRecord {
   id: string;
@@ -361,6 +362,9 @@ export interface ImportRecord {
   // Passive hint for studio_scrape imports: which TikTok handle the captured data belongs to,
   // even when that account isn't connected via OAuth — see TikTokVideoStats.tiktokUsername.
   tiktokUsername?: string;
+  // Explicit, user-declared provenance; never inferred from the storage container.
+  sourceKind?: SalesSourceKind;
+  sourceLabel?: string; // required for new external references; absent on legacy records
 }
 
 // ── TikTok Studio video stats (captured by the browser extension) ──────────
@@ -4109,6 +4113,7 @@ class DatabaseService {
 
     const importRecord = await this.createImport({
       type: 'sales_file',
+      sourceKind: 'own',
       label,
       itemCount: orders.length,
       importedAt: now,
@@ -4300,10 +4305,12 @@ class DatabaseService {
   }
 
   /** Import sales reference file - stored for reference, not included in analytics calculations. */
-  async importSalesReference(file: File, accountId?: string): Promise<{ importId: string; rowCount: number }> {
+  async importSalesReference(file: File, sourceLabel: string, accountId?: string): Promise<{ importId: string; rowCount: number }> {
     const user = auth.currentUser;
     if (!user) throw new Error('Not authenticated');
     
+    if (!sourceLabel.trim()) throw new Error('External source label is required');
+
     // Parse Excel file (same way as analytics imports, but without column validation)
     const ext = file.name.toLowerCase().split('.').pop();
     let workbook: XLSX.WorkBook;
@@ -4333,6 +4340,8 @@ class DatabaseService {
     const now = new Date().toISOString();
     const importRecord = await this.createImport({
       type: 'sales_reference',
+      sourceKind: 'external',
+      sourceLabel: sourceLabel.trim(),
       label: file.name,
       itemCount: rows.length,
       importedAt: now,

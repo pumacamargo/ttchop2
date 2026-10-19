@@ -5,6 +5,7 @@ import {
   ArrowUp, ArrowDown, ArrowUpDown, Video as VideoIcon, ClipboardList,
 } from 'lucide-react';
 import { db, getVisibleForContainer } from '../services/databaseService';
+import { visibleOwnOrders, visibleReferences, referenceProvenance } from '../utils/salesProvenance';
 import type { AnalyticsOrder, Render, Template, TikTokVideoStats, ImportRecord, ImportContainerRef } from '../services/databaseService';
 import { parseAnalyticsFile, AnalyticsImportError } from '../services/analyticsImport';
 import { useT } from '../context/LanguageContext';
@@ -205,6 +206,8 @@ export const AnalyticsView: React.FC = () => {
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [ownConfirmed, setOwnConfirmed] = useState(false);
+  const [sourceLabel, setSourceLabel] = useState('');
   const [refImporting, setRefImporting] = useState(false);
   const [refImportResult, setRefImportResult] = useState<{ fileName: string; rowCount: number } | null>(null);
   const [refImportError, setRefImportError] = useState('');
@@ -249,7 +252,8 @@ export const AnalyticsView: React.FC = () => {
     () => new Map<string, ImportContainerRef>(allImports.map(imp => [imp.id, imp])),
     [allImports]
   );
-  const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId, importsById), [allOrders, activeAccountId, importsById]);
+  const orders = useMemo(() => visibleOwnOrders(allOrders, activeAccountId, allImports), [allOrders, activeAccountId, allImports]);
+  const references = useMemo(() => visibleReferences(allImports, activeAccountId), [allImports, activeAccountId]);
   const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
   const videoStats = useMemo(() => getVisibleForContainer(allVideoStats, activeAccountId, importsById), [allVideoStats, activeAccountId, importsById]);
 
@@ -380,6 +384,7 @@ export const AnalyticsView: React.FC = () => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    if (!ownConfirmed) return;
 
     setImporting(true);
     setImportError('');
@@ -411,16 +416,19 @@ export const AnalyticsView: React.FC = () => {
   const handleSalesReferenceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!sourceLabel.trim()) { setRefImportError(t.analytics_reference_source_required); return; }
 
     setRefImportError('');
     setRefImportResult(null);
 
     try {
       setRefImporting(true);
-      const result = await db.importSalesReference(file, activeAccountId ?? undefined);
+      const result = await db.importSalesReference(file, sourceLabel.trim(), activeAccountId ?? undefined);
       setRefImportResult({ fileName: file.name, rowCount: result.rowCount });
+      await loadAll();
     } catch (error) {
-      setRefImportError(`Failed to import: ${error}`);
+      console.error(error);
+      setRefImportError(t.analytics_reference_import_error);
     } finally {
       setRefImporting(false);
     }
@@ -457,7 +465,7 @@ export const AnalyticsView: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileSpreadsheet size={16} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-            <h4 style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>{t.analytics_import_title}</h4>
+            <h4 style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>{t.analytics_own_title}</h4>
           </div>
           <button
             onClick={() => setShowManageImports(true)}
@@ -468,6 +476,11 @@ export const AnalyticsView: React.FC = () => {
           </button>
         </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>{t.analytics_import_hint}</p>
+        <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: 0 }}>{t.analytics_container_not_source}</p>
+        <label style={{ fontSize: '0.76rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <input type="checkbox" checked={ownConfirmed} onChange={e => setOwnConfirmed(e.target.checked)} />
+          {t.analytics_confirm_own}
+        </label>
 
         <input
           ref={fileInputRef}
@@ -489,6 +502,7 @@ export const AnalyticsView: React.FC = () => {
         ) : (
           <button
             onClick={() => fileInputRef.current?.click()}
+            disabled={!ownConfirmed}
             className="btn btn-secondary"
             style={{ width: 'auto', alignSelf: 'flex-start', minHeight: '44px', padding: '0 1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
           >
@@ -538,27 +552,35 @@ export const AnalyticsView: React.FC = () => {
           </div>
         )}
 
-      {/* ── Reference Sales Data Upload (secondary, low-emphasis by design) ───────── */}
-      <div style={{
-        marginTop: '0.9rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)',
-        display: 'flex', flexDirection: 'column', gap: '0.45rem',
+      </div>
+
+      {/* References are a separate collection and a separate visual section. */}
+      <section className="glass-card" aria-label={t.analytics_reference_title} style={{
+        padding: '0.9rem 1rem', marginBottom: '1.1rem', border: '1px solid var(--warning)',
+        background: 'color-mix(in srgb, var(--warning) 5%, var(--bg-card))',
+        display: 'flex', flexDirection: 'column', gap: '0.5rem',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           <FileSpreadsheet size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
           <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-            Reference data
+            {t.analytics_reference_title}
           </span>
         </div>
         <p style={{ margin: 0, fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-          Upload sales files from other accounts for reference only — stored in Firestore, never counted in analytics.
+          {t.analytics_reference_hint}
         </p>
+        <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: 0 }}>{t.analytics_container_not_source}</p>
+        <label style={{ fontSize: '0.75rem', color: 'var(--text-primary)' }} htmlFor="reference-source">{t.analytics_reference_source_label}</label>
+        <input id="reference-source" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)}
+          placeholder={t.analytics_reference_source_placeholder} maxLength={120}
+          style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', padding: '0.6rem', maxWidth: 360 }} />
         <button
           onClick={() => refInputRef.current?.click()}
-          disabled={refImporting}
+          disabled={refImporting || !sourceLabel.trim()}
           className="btn btn-secondary"
           style={{ width: 'auto', alignSelf: 'flex-start', minHeight: '36px', padding: '0 0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem' }}
         >
-          <Upload size={12} /> {refImporting ? 'Uploading…' : 'Upload reference file'}
+          <Upload size={12} /> {refImporting ? t.analytics_reference_uploading : t.analytics_reference_upload}
         </button>
         <input ref={refInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleSalesReferenceUpload} style={{ display: 'none' }} disabled={refImporting} />
 
@@ -569,7 +591,7 @@ export const AnalyticsView: React.FC = () => {
           }}>
             <CheckCircle2 size={14} style={{ color: 'var(--success)', flexShrink: 0, marginTop: '1px' }} />
             <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
-              <strong style={{ color: 'var(--text-primary)' }}>{refImportResult.fileName}</strong>: {refImportResult.rowCount} row{refImportResult.rowCount === 1 ? '' : 's'} saved for reference.
+              <strong style={{ color: 'var(--text-primary)' }}>{refImportResult.fileName}</strong>: {t.analytics_reference_saved.replace('{count}', String(refImportResult.rowCount))}
             </p>
           </div>
         )}
@@ -583,8 +605,13 @@ export const AnalyticsView: React.FC = () => {
             <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0, flex: 1, wordBreak: 'break-word' }}>{refImportError}</p>
           </div>
         )}
-      </div>
-      </div>
+        <h4 style={{ margin: '0.4rem 0 0', fontSize: '0.76rem' }}>{t.analytics_reference_list}</h4>
+        {references.length === 0 ? <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-muted)' }}>{t.analytics_reference_empty}</p> :
+          references.map(imp => <div key={imp.id} style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border)', paddingTop: '0.4rem', overflowWrap: 'anywhere' }}>
+            <strong>{referenceProvenance(imp) === 'external' ? t.analytics_reference_source_named.replace('{source}', imp.sourceLabel!.trim()) : t.analytics_reference_unverified}</strong>
+            {' · '}{imp.label} {' · '}{t.analytics_reference_rows.replace('{count}', String(imp.itemCount))}
+          </div>)}
+      </section>
 
       {/* ── Body: loading / error / empty / dashboard ───────────────────── */}
       {loading ? (

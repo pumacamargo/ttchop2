@@ -9,6 +9,7 @@ import {
   Package, Video, LayoutTemplate, Scissors, Sparkles, Info,
 } from 'lucide-react';
 import { db, getVisibleForContainer } from '../services/databaseService';
+import { visibleOwnOrders } from '../utils/salesProvenance';
 import type { AnalyticsOrder, Render, Template, TikTokVideoStats, ImportRecord, ImportContainerRef } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
@@ -165,7 +166,7 @@ export const DashboardView: React.FC<{ onGoToAnalytics?: () => void }> = ({ onGo
     () => new Map<string, ImportContainerRef>(allImports.map(imp => [imp.id, imp])),
     [allImports]
   );
-  const orders = useMemo(() => getVisibleForContainer(allOrders, activeAccountId, importsById), [allOrders, activeAccountId, importsById]);
+  const orders = useMemo(() => visibleOwnOrders(allOrders, activeAccountId, allImports), [allOrders, activeAccountId, allImports]);
   const renders = useMemo(() => getVisibleForContainer(allRenders, activeAccountId), [allRenders, activeAccountId]);
   const videoStats = useMemo(() => getVisibleForContainer(allVideoStats, activeAccountId, importsById), [allVideoStats, activeAccountId, importsById]);
 

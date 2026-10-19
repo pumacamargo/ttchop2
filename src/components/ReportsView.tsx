@@ -3,9 +3,9 @@ import {
   FileBarChart, RefreshCw, AlertTriangle, Sparkles, Trash2, X, ChevronRight, Clock,
 } from 'lucide-react';
 import { db, getVisibleForContainer } from '../services/databaseService';
+import { visibleOwnOrders } from '../utils/salesProvenance';
 import type {
   AnalyticsOrder, Render, BrandConcept, ReportHistoryEntry, ReportOrderSummary, ReportRenderInfo,
-  ImportContainerRef,
 } from '../services/databaseService';
 import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
@@ -117,9 +117,8 @@ export const ReportsView: React.FC = () => {
         db.getReportHistory(),
         db.getImports(),
       ]);
-      // Orders resolve THROUGH their import when they have one — see getEffectiveContainer.
-      const importsById = new Map<string, ImportContainerRef>(importRows.map(imp => [imp.id, imp]));
-      setOrders(getVisibleForContainer(orderRows, activeAccountId, importsById));
+      // Own-only gate also resolves containers through imports; references never enter reports.
+      setOrders(visibleOwnOrders(orderRows, activeAccountId, importRows));
       setRenders(getVisibleForContainer(renderRows, activeAccountId));
       setBrandConcept(concept);
       setStrategy(calStrategy?.strategy ?? '');

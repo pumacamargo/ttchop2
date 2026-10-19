@@ -81,6 +81,7 @@ captura las estadísticas de los videos desde TikTok Studio. Instalación y uso 
 ## Documentación
 
 - [`CLAUDE.md`](CLAUDE.md) — arquitectura, esquema de datos y trampas conocidas
+- [`docs/analytics-provenance.md`](docs/analytics-provenance.md) — separación entre ventas propias y referencias externas
 - [`PLAN.md`](PLAN.md) — estado por fase y pendientes
 - [`PENDIENTES-SERVIDOR.md`](PENDIENTES-SERVIDOR.md) — lo que la webapp ya llama y `ttchop-server`
   todavía no implementa
