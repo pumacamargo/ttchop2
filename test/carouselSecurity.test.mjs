@@ -14,8 +14,8 @@ test('account switching discards stale carousel list responses', () => {
 
 test('carousel API sends transient Firebase ID token and never trusts body userId', () => {
   assert.match(carousel, /getIdToken\(\)/);
-  assert.match(carousel, /Authorization: `Bearer /);
-  assert.doesNotMatch(carousel, /userId: user\.uid/);
+  assert.ok(carousel.includes('Authorization: `Bearer ${idToken}`'));
+  assert.doesNotMatch(carousel, /userId: user\.uid|userId: scope\.userId/);
   assert.doesNotMatch(carousel, /localStorage|sessionStorage/);
 });
 test('carousel read/list/delete go through server and Firestore denies direct access to callbackToken', () => {
