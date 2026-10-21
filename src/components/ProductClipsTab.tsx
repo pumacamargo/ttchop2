@@ -5,6 +5,7 @@ import { useT } from '../context/LanguageContext';
 import { useContainer } from '../context/ContainerContext';
 import { SessionsPanel } from './SessionsPanel';
 import { SessionDetailModal } from './SessionDetailModal';
+import { suggestProductClipName } from '../utils/suggestProductClipName';
 
 interface ProductClipsTabProps {
   product: Product;
@@ -66,6 +67,7 @@ export const ProductClipsTab: React.FC<ProductClipsTabProps> = ({ product }) => 
       emptyTitle={t.product_clips_empty}
       emptyHint={t.product_clips_empty_hint}
       createLabel={t.create_new_session}
+      suggestedName={() => suggestProductClipName(product.name, allSessions.map(s => s.name))}
       onCreate={async name => { await db.saveSession(name, [product.id], activeAccountId ?? undefined); await fetchAll(); }}
       onSelect={setSelectedSession}
     />

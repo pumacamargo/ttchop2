@@ -72,6 +72,8 @@ interface SessionsPanelProps {
   emptyTitle: string;
   emptyHint: string;
   createLabel: string;
+  /** Only product-scoped creation supplies a default; the standalone form stays blank. */
+  suggestedName?: () => string;
   onCreate: (name: string) => Promise<void>;
   onSelect: (session: Session) => void;
 }
@@ -81,7 +83,7 @@ interface SessionsPanelProps {
 // affordances without duplicating markup. Fetching stays with the caller since the two contexts
 // query different scopes (all sessions vs. sessions for one product).
 export const SessionsPanel: React.FC<SessionsPanelProps> = ({
-  sessions, products, loading, errorMsg, onRetry, groupByRegion, emptyTitle, emptyHint, createLabel, onCreate, onSelect,
+  sessions, products, loading, errorMsg, onRetry, groupByRegion, emptyTitle, emptyHint, createLabel, suggestedName, onCreate, onSelect,
 }) => {
   const t = useT();
   const { activeAccountId } = useContainer();
@@ -89,6 +91,13 @@ export const SessionsPanel: React.FC<SessionsPanelProps> = ({
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
   const [formError, setFormError] = useState('');
+
+  const openAddForm = () => {
+    // Initialize only on opening. Subsequent fetches/renders must not replace manual edits.
+    setName(suggestedName?.() ?? '');
+    setFormError('');
+    setShowAddForm(true);
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,12 +162,12 @@ export const SessionsPanel: React.FC<SessionsPanelProps> = ({
 
   return (
     <div>
-      {!showAddForm && !loading && sessions.length > 0 && (
+      {!showAddForm && !loading && !errorMsg && sessions.length > 0 && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
           <button
             className="btn btn-primary"
             style={{ width: 'auto', minHeight: '44px', padding: '0 1rem' }}
-            onClick={() => setShowAddForm(true)}
+            onClick={openAddForm}
           >
             <Plus size={16} /> {createLabel}
           </button>
@@ -216,7 +225,7 @@ export const SessionsPanel: React.FC<SessionsPanelProps> = ({
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? <><RefreshCw size={16} className="loading-spinner" /> {t.creating}</> : t.create_session}
             </button>
-            <button type="button" className="btn btn-secondary" onClick={() => { setShowAddForm(false); setFormError(''); }} disabled={saving}>
+            <button type="button" className="btn btn-secondary" onClick={() => { setShowAddForm(false); setName(''); setFormError(''); }} disabled={saving}>
               {t.cancel}
             </button>
           </div>
@@ -240,13 +249,15 @@ export const SessionsPanel: React.FC<SessionsPanelProps> = ({
           <Clapperboard size={48} style={{ opacity: 0.15, marginBottom: '1rem', color: 'var(--primary)' }} />
           <h4 style={{ color: 'var(--text-primary)', marginBottom: '0.5rem' }}>{emptyTitle}</h4>
           <p style={{ fontSize: '0.8rem', marginBottom: '1rem' }}>{emptyHint}</p>
-          <button
-            className="btn btn-primary"
-            style={{ width: 'auto', minHeight: '44px', padding: '0 1.25rem', margin: '0 auto' }}
-            onClick={() => setShowAddForm(true)}
-          >
-            <Plus size={16} /> {createLabel}
-          </button>
+          {!errorMsg && (
+            <button
+              className="btn btn-primary"
+              style={{ width: 'auto', minHeight: '44px', padding: '0 1.25rem', margin: '0 auto' }}
+              onClick={openAddForm}
+            >
+              <Plus size={16} /> {createLabel}
+            </button>
+          )}
         </div>
       ) : !groupByRegion ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
