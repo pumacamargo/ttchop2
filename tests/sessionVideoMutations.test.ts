@@ -174,12 +174,15 @@ test('out-of-order save completions merge only their intent into current local s
 /* eslint-disable @typescript-eslint/no-explicit-any -- dynamic transpiled JSX/hook test adapter */
 // Exercise the actual component callbacks, not a copy of their persistence logic.
 // JSX is a plain element tree and hooks retain slots across explicit re-renders.
-async function modal(database: any, initial = session()) {
+export async function modal(database: any, initial = session(), environment: any = {}) {
   const require = createRequire(import.meta.url);
   const ts = require('typescript');
   const helper = await import(helperUrl.href);
+  const workflowUrl = new URL('../src/utils/sessionUploadWorkflow.ts', import.meta.url);
+  const workflow = existsSync(workflowUrl) ? await import(workflowUrl.href) : {};
   let cursor = 0;
   const slots: any[] = [];
+  const effects: any[] = [];
   const hooks = {
     useState(initial: any) {
       const i = cursor++;
@@ -191,7 +194,7 @@ async function modal(database: any, initial = session()) {
       if (!(i in slots)) slots[i] = { current: initial };
       return slots[i];
     },
-    useEffect() {}, useMemo(fn: any) { return fn(); }, useCallback(fn: any) { return fn; },
+    useEffect(effect: any) { effects.push(effect); }, useMemo(fn: any) { return fn(); }, useCallback(fn: any) { return fn; },
   };
   const jsx = (type: any, props: any) => ({ type, props });
   const source = readFileSync(new URL('../src/components/SessionDetailModal.tsx', import.meta.url), 'utf8');
@@ -202,12 +205,14 @@ async function modal(database: any, initial = session()) {
   vm.runInNewContext(output, { exports, console, Blob,
     URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} },
     navigator: {}, document: { addEventListener() {}, removeEventListener() {} },
-    setTimeout() { return 0; },
+    setTimeout() { return 0; }, clearTimeout() {}, AbortController,
+    ...environment,
     require(id: string) {
     if (id === 'react') return hooks;
     if (id === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'fragment' };
     if (id.endsWith('/databaseService')) return { db: database, REGION_LABELS: {} };
     if (id.endsWith('/sessionVideoMutations')) return helper;
+    if (id.endsWith('/sessionUploadWorkflow')) return workflow;
     if (id === 'lucide-react') return {};
     if (id.endsWith('/LanguageContext')) return { useT: () => ({}) };
     throw new Error('Unexpected component dependency: ' + id);
@@ -225,7 +230,9 @@ async function modal(database: any, initial = session()) {
     walk(tree);
     return nodes;
   }
-  return { render, card: () => render().find(n => n.props?.video?.id === 'a') };
+  return { render, card: () => render().find(n => n.props?.video?.id === 'a'),
+    mountEffects() { const cleanups = effects.splice(0).map(effect => effect()); return () => cleanups.forEach(cleanup => cleanup?.()); },
+  };
 }
 
 test('actual retry callback waits for processing persistence and does not call AI on rejection', async () => {
@@ -302,7 +309,10 @@ test('actual Analyze All persists each clip first and skips AI for rejected save
 test('actual upload registration failure is reported, not shown as uploaded or locally added', async () => {
   let aiCalls = 0;
   const ui = await modal({
-    async uploadSessionVideoFile() { return 'storage-url'; },
+    createSessionVideoUpload(sessionId: string) { return { id: 'new', sessionId, userId: 'owner', path: 'stable', transferred: false, registered: false }; },
+    assertSessionVideoUploadOwner() {},
+    async transferSessionVideoFile() {},
+    async getSessionVideoDownloadURL() { return 'storage-url'; },
     async addSessionVideo() { throw new Error('registration rejected'); },
     async extractVideoMetadata() { aiCalls++; return {}; },
   });
@@ -314,7 +324,7 @@ test('actual upload registration failure is reported, not shown as uploaded or l
   const nodes = ui.render();
   assert.equal(nodes.filter(n => n.props?.video).length, 1);
   assert.equal(aiCalls, 0);
-  assert.ok(nodes.some(n => n.props?.children === 'registration rejected'));
+  assert.ok(nodes.some(n => String(n.props?.children).includes('bytes del video subidos; registro pendiente')));
   assert.equal(nodes.some(n => String(n.props?.children).includes('✓ Subidos')), false);
 });
 

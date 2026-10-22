@@ -1,7 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { db, REGION_LABELS } from '../services/databaseService';
 import type { Product, Session, SessionVideo } from '../services/databaseService';
 import { applySessionVideoMutation, commitSessionVideoMutation } from '../utils/sessionVideoMutations';
+import { runSessionUpload, uploadErrorCode } from '../utils/sessionUploadWorkflow';
+import type { UploadCheckpoint, UploadDiagnostic } from '../utils/sessionUploadWorkflow';
 import type { SessionVideoMutation } from '../utils/sessionVideoMutations';
 import { ArrowLeft, Trash2, RefreshCw, UploadCloud, Scissors, Play, Pause, Volume2, VolumeX, Edit2, Check, X as XIcon } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
@@ -28,64 +30,61 @@ interface VideoMetadata {
 // works even for phone-recorded videos whose moov atom sits at the end of the file, which
 // would otherwise force the browser to download the whole file just to seek/show a frame).
 // Accepts an already-created object URL so the caller controls the lifecycle.
-function getVideoMetadataFromUrl(objectUrl: string): Promise<VideoMetadata> {
-  const probe = new Promise<VideoMetadata>(resolve => {
+function getVideoMetadataFromUrl(objectUrl: string, signal?: AbortSignal): Promise<VideoMetadata> {
+  return new Promise(resolve => {
     const video = document.createElement('video');
+    let settled = false;
+    let duration = 0;
+    const finish = (thumbnailBlob: Blob | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      video.onloadedmetadata = video.onseeked = video.onerror = null;
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      resolve({ duration, thumbnailBlob });
+    };
+    const cancel = () => finish(null);
+    const timer = setTimeout(() => finish(null), 8000);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) { finish(null); return; }
     video.preload = 'auto';
     video.muted = true;
     video.playsInline = true;
-
     video.onloadedmetadata = () => {
-      video.currentTime = Math.min(0.1, video.duration || 0.1);
+      duration = Number.isFinite(video.duration) ? video.duration : 0;
+      video.currentTime = Math.min(0.1, duration || 0.1);
     };
     video.onseeked = () => {
-      const duration = video.duration || 0;
       try {
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(video, 0, 0);
-        canvas.toBlob(blob => resolve({ duration, thumbnailBlob: blob }), 'image/jpeg', 0.75);
-      } catch {
-        resolve({ duration, thumbnailBlob: null });
-      }
+        canvas.getContext('2d')?.drawImage(video, 0, 0);
+        canvas.toBlob(blob => finish(blob), 'image/jpeg', 0.75);
+      } catch { finish(null); }
     };
-    video.onerror = () => resolve({ duration: 0, thumbnailBlob: null });
+    video.onerror = () => finish(null);
     video.src = objectUrl;
   });
-  const timeout = new Promise<VideoMetadata>(resolve => setTimeout(() => resolve({ duration: 0, thumbnailBlob: null }), 8000));
-  return Promise.race([probe, timeout]);
 }
 
 // Traduce los errores de Firebase Storage a algo que el usuario pueda accionar. El texto crudo
 // ("storage/retry-limit-exceeded: Max retry time for operation exceeded") es cierto pero no le
 // dice a nadie qué hacer, y sin eso no hay forma de distinguir un problema de red de uno de permisos.
-function describeUploadError(err: any): string {
-  const code: string = err?.code || '';
-  const raw: string = err?.message || '';
-
-  if (err?.message === 'upload_stalled') {
-    return 'La subida se quedó sin avanzar. Suele ser la conexión: intenta con WiFi o sube menos archivos a la vez.';
-  }
-  switch (code) {
+function describeUploadError(err: unknown): string {
+  switch (uploadErrorCode(err)) {
+    case 'upload/stalled': return 'La subida dejó de avanzar. Mantén la pantalla encendida y prueba con WiFi.';
     case 'storage/retry-limit-exceeded':
-      return 'La conexión se cortó durante la subida. Intenta con WiFi, o sube este archivo solo.';
-    case 'storage/canceled':
-      return 'La subida se canceló antes de terminar.';
-    case 'storage/unauthenticated':
-      return 'Tu sesión expiró. Recarga la página y vuelve a entrar.';
+    case 'storage/network-request-failed': return 'La conexión se cortó. Intenta con WiFi.';
+    case 'storage/unauthenticated': return 'Tu sesión expiró. Vuelve a entrar.';
     case 'storage/unauthorized':
-      return 'No tienes permiso para subir a esta sesión.';
-    case 'storage/quota-exceeded':
-      return 'Se agotó el espacio de almacenamiento del proyecto.';
-    case 'storage/server-file-wrong-size':
-      return 'El archivo llegó incompleto al servidor. Vuelve a intentarlo.';
-    case 'storage/unknown':
-      // Suele ser el navegador del celular soltando la referencia al archivo a media subida.
-      return 'El dispositivo dejó de dar acceso al archivo a media subida. Vuelve a seleccionarlo y súbelo solo, sin otros archivos en la misma tanda.';
-    default:
-      return code ? `${code}: ${raw}` : (raw || 'Error desconocido');
+    case 'permission-denied': return 'No tienes permiso para completar esta operación.';
+    case 'storage/quota-exceeded': return 'Se agotó la cuota de almacenamiento.';
+    case 'upload/file-read': return 'No se pudo leer el archivo. Descárgalo al dispositivo y vuelve a seleccionarlo.';
+    default: return 'No se pudo completar esta fase. Puedes reintentar los fallidos.';
   }
 }
 
@@ -589,12 +588,30 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     status: UploadStatus;
     progress: number; // 0–100
     errorMsg?: string;
+    detail?: string;
   }
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
   // Los errores llevan su mensaje: la cola por archivo se vacía al terminar el lote, así que si
   // el resumen solo guardara nombres se perdería el motivo y no habría nada que diagnosticar.
   const [uploadSummary, setUploadSummary] = useState<{ uploaded: string[]; skipped: string[]; errors: { name: string; message: string }[] } | null>(null);
-  const isUploading = useMemo(() => uploadQueue.some(u => u.status === 'waiting' || u.status === 'uploading'), [uploadQueue]);
+  const [isUploading, setBatchUploading] = useState(false);
+  const batchLock = useRef(false);
+  const mounted = useRef(true);
+  const activeScope = useRef(`${session.userId}:${session.id}`);
+  const batchCleanup = useRef<null | (() => void)>(null);
+  type PendingUpload = { file: File; checkpoint: UploadCheckpoint; name: string; createdAt: string; failed: boolean; aiStarted: boolean };
+  const checkpoints = useRef(new Map<string, PendingUpload>());
+  const failedFilesRef = useRef(new Map<string, File>());
+  const [failedFiles, setFailedFiles] = useState<File[]>([]);
+  const diagnostics = useRef<UploadDiagnostic[]>([]);
+  const [uploadDiagnostics, setUploadDiagnostics] = useState<UploadDiagnostic[]>([]);
+  useEffect(() => {
+    mounted.current = true;
+    activeScope.current = `${session.userId}:${session.id}`;
+    const pending = checkpoints.current;
+    const failed = failedFilesRef.current;
+    return () => { mounted.current = false; batchCleanup.current?.(); pending.clear(); failed.clear(); };
+  }, [session.id, session.userId]);
 
   useEffect(() => {
     db.getProducts().then(setAllProducts).catch(() => {});
@@ -619,14 +636,17 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
 
   const pendingVideoSaves = useRef(0);
 
-  const saveVideoMutation = (save: Promise<SessionVideoMutation | null>) =>
-    commitSessionVideoMutation(save, mutation => {
+  const saveVideoMutation = (save: Promise<SessionVideoMutation | null>) => {
+    const scope = `${session.userId}:${session.id}`;
+    return commitSessionVideoMutation(save, mutation => {
+      if (!mounted.current || activeScope.current !== scope) return;
       // An older save can finish after another clip was added, trimmed or deleted.
       // Merge only this operation into the CURRENT state, never its snapshot array.
       const updated = applySessionVideoMutation(videosRef.current, mutation);
       videosRef.current = updated;
       setVideos(updated);
     });
+  };
 
   const persistVideo = async (save: Promise<SessionVideoMutation | null>) => {
     pendingVideoSaves.current++;
@@ -643,13 +663,18 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
   };
 
   const triggerMetadataExtraction = async (videoId: string, downloadUrl: string, name: string, duration: number) => {
+    const scope = `${session.userId}:${session.id}`;
+    const live = () => mounted.current && activeScope.current === scope;
+    if (!live()) return;
     let metadata;
     try {
       metadata = await db.extractVideoMetadata(session.id, videoId, downloadUrl, name, duration);
     } catch {
+      if (!live()) return;
       await persistVideo(db.patchSessionVideo(session.id, videoId, { metadataStatus: 'error' }, { ifMetadataStatus: 'processing' }));
       return;
     }
+    if (!live()) return;
     // A failed save is NOT an extraction failure or a local 'ready' result.
     await persistVideo(db.patchSessionVideo(session.id, videoId,
       { metadataStatus: 'ready', aiMetadata: metadata }, { ifMetadataStatus: 'processing' }));
@@ -662,189 +687,169 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     }
   };
 
-  const handleFilesSelected = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
-
+  const handleFilesSelected = async (fileList: FileList | File[] | null, retryFailed = false) => {
+    if (batchLock.current || !fileList?.length) return;
     const files = Array.from(fileList).filter(f => f.type.startsWith('video/'));
-    if (files.length === 0) {
-      setError('Select video files (mp4, mov, etc.)');
-      return;
-    }
-
-    setError('');
-    setUploadSummary(null);
-
-    const existingNames = new Set(videosRef.current.map(v => v.name));
-
-    // OJO: aquí NO se leen los bytes todavía. Leer los de todos los archivos de una vez
-    // (9 clips de 60-80 MB = medio giga en RAM) hace que el navegador del celular mate la
-    // pestaña. Cada archivo se lee justo antes de su propia subida, más abajo.
-    type FileEntry = { name: string; file: File };
-    const fileEntries: FileEntry[] = files.map(f => ({ name: f.name, file: f }));
-
-    // Initialize queue — duplicates already marked as skipped
-    const queue: UploadItem[] = fileEntries.map(fe => ({
-      name: fe.name,
-      status: existingNames.has(fe.name) ? 'skipped' : 'waiting',
-      progress: 0,
-    }));
-    setUploadQueue(queue);
-
+    if (!files.length) { setError('Select video files (mp4, mov, etc.)'); return; }
+    batchLock.current = true; // Synchronous: reject two callbacks before React re-renders.
+    setBatchUploading(true);
+    const scope = `${session.userId}:${session.id}`;
+    const live = () => mounted.current && activeScope.current === scope;
     const summary = { uploaded: [] as string[], skipped: [] as string[], errors: [] as { name: string; message: string }[] };
-
-    // Collect skipped
-    queue.forEach(item => { if (item.status === 'skipped') summary.skipped.push(item.name); });
-
+    const seen = new Set(videosRef.current.map(v => v.name));
+    const batchNames = new Set<string>();
+    const entries = files.map(file => {
+      const key = JSON.stringify([scope, file.name, file.size, file.lastModified]);
+      const previous = checkpoints.current.get(key);
+      const skip = batchNames.has(file.name) || (!retryFailed && seen.has(file.name)) || Boolean(previous?.checkpoint.registered);
+      batchNames.add(file.name);
+      return { file, key, skip };
+    });
+    const queue: UploadItem[] = entries.map(({ file, skip }) => ({ name: file.name, status: skip ? 'skipped' : 'waiting', progress: 0 }));
     const updateItem = (index: number, patch: Partial<UploadItem>) => {
-      setUploadQueue(prev => {
-        const next = [...prev];
-        next[index] = { ...next[index], ...patch };
-        return next;
-      });
+      if (live()) setUploadQueue(prev => prev.map((item, i) => i === index ? { ...item, ...patch } : item));
     };
-
-    // ── Keep screen on ────────────────────────────────────────────────────────
-    // Strategy 1: Screen Wake Lock API
-    const wl = { lock: null as null | { release: () => Promise<void> } };
+    let wakeLock: null | { release: () => Promise<void> } = null;
+    let acquiringWakeLock = false;
+    let finished = false;
+    const controller = new AbortController();
     const acquireWakeLock = async () => {
+      if (finished || acquiringWakeLock || wakeLock) return;
+      acquiringWakeLock = true;
       try {
-        if ('wakeLock' in navigator) wl.lock = await (navigator as any).wakeLock.request('screen');
-      } catch (_) { /* not supported or denied */ }
+        if ('wakeLock' in navigator) {
+          const lock = await (navigator as any).wakeLock.request('screen');
+          if (finished || !live()) await lock.release();
+          else { wakeLock = lock; lock.addEventListener?.('release', () => { if (wakeLock === lock) wakeLock = null; }, { once: true }); }
+        }
+      } catch { /* screen-on is best effort, not background upload support */ }
+      finally { acquiringWakeLock = false; }
     };
-    const onVisibilityChange = () => { if (document.visibilityState === 'visible') acquireWakeLock(); };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    await acquireWakeLock();
-
-    // Strategy 2: Silent AudioContext (prevents Chrome from backgrounding when screen dims)
-    let audioCtx: AudioContext | null = null;
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible') void acquireWakeLock(); };
+    const cleanup = () => {
+      finished = true;
+      controller.abort();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      void wakeLock?.release().catch(() => {});
+      wakeLock = null;
+    };
+    batchCleanup.current = cleanup;
     try {
-      audioCtx = new AudioContext();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      gain.gain.value = 0; // completely silent
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-    } catch (_) { /* not supported */ }
-
-    for (let i = 0; i < fileEntries.length; i++) {
-      if (queue[i].status === 'skipped') continue;
-
-      const { name, file } = fileEntries[i];
-      updateItem(i, { status: 'uploading', progress: 0 });
-
-      let objectUrl = '';
-      try {
-        // Cómo se entrega el archivo a Storage, según su tamaño. Hay dos riesgos opuestos:
-        //
-        //   - Leerlo entero con arrayBuffer() lo blinda contra que el navegador invalide la
-        //     referencia al archivo del dispositivo, pero exige reservar TODO el archivo de golpe
-        //     en RAM. En celular eso revienta con archivos grandes (falló con 76 MB y 63 MB).
-        //   - Pasar el File directo deja que Firebase lo lea por bloques, así que la memoria no
-        //     importa, pero depende de que la referencia siga viva durante toda la subida.
-        //
-        // Por eso: los chicos se leen en memoria, los grandes se suben por bloques.
-        // Sonda: leer los primeros KB del archivo antes de arrancar la subida. Si el dispositivo
-        // no puede servirlo (por ejemplo un video que vive en la nube de Google Fotos y no está
-        // descargado en el teléfono), esta lectura falla o se cuelga, y sin la sonda la subida se
-        // queda en 0% durante minutos sin decir nada. Mejor fallar en 15s con un mensaje útil.
+      setError('');
+      setUploadSummary(null);
+      setUploadQueue(queue);
+      document.addEventListener('visibilitychange', onVisibilityChange);
+      void acquireWakeLock();
+      for (let i = 0; i < entries.length && live(); i++) {
+        const { file, key, skip } = entries[i];
+        const name = file.name;
+        if (skip) { summary.skipped.push(name); continue; }
+        let entry = checkpoints.current.get(key);
+        let objectUrl = '';
+        let blob: File | Blob = file;
+        let prepared = false;
+        let bytes = entry?.checkpoint.transferred ? file.size : 0;
         try {
-          await Promise.race([
-            file.slice(0, 65536).arrayBuffer(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('probe_timeout')), 15_000)),
-          ]);
-        } catch {
-          throw new Error('El dispositivo no pudo entregar este archivo. Si está en Google Fotos o en la nube, descárgalo al teléfono primero y vuelve a intentarlo.');
-        }
-
-        const READ_INTO_MEMORY_LIMIT = 25 * 1024 * 1024;
-        let blob: Blob | File;
-        if (file.size <= READ_INTO_MEMORY_LIMIT) {
-          try {
-            blob = new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' });
-          } catch {
-            throw new Error('No se pudo leer el archivo del dispositivo. Vuelve a seleccionarlo y súbelo de nuevo.');
-          }
-        } else {
-          blob = file;
-        }
-        objectUrl = URL.createObjectURL(blob);
-
-        // Retry upload up to 3 times on transient network errors
-        let downloadUrl = '';
-        let lastUploadErr: any;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            updateItem(i, { progress: 0 });
-            downloadUrl = await db.uploadSessionVideoFile(session.id, blob, name, pct => updateItem(i, { progress: pct }));
-            lastUploadErr = null;
-            break;
-          } catch (e: any) {
-            lastUploadErr = e;
-            if (attempt < 2) {
-              const reason = e?.message === 'upload_stalled' ? 'sin progreso 30s' : 'error de red';
-              updateItem(i, { errorMsg: `Reintentando (${attempt + 2}/3) — ${reason}…` });
-              await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+          if (!entry) {
+            const checkpoint = db.createSessionVideoUpload(session.id);
+            if (checkpoint.userId !== session.userId) {
+              throw Object.assign(new Error('Session owner changed'), { code: 'storage/unauthorized' });
             }
+            entry = { file, checkpoint, name, createdAt: new Date().toISOString(), failed: false, aiStarted: false };
+            checkpoints.current.set(key, entry);
           }
-        }
-        if (lastUploadErr) throw lastUploadErr;
-
-        // A partir de aquí los bytes YA están en Storage. Todo lo que sigue (leer la duración,
-        // generar y subir la miniatura) es opcional y puede fallar en un celular con un archivo
-        // grande: la pestaña se suspende, se queda sin memoria, o se corta la red. Antes esos
-        // fallos tiraban el video entero aunque la subida hubiera terminado, dejando el archivo
-        // huérfano en Storage y al usuario creyendo que "no subió". Por eso se registra PRIMERO
-        // con lo mínimo y se enriquece después.
-        const videoId = `vid_${Math.random().toString(36).substring(2, 9)}`;
-        const baseVid: SessionVideo = {
-          id: videoId,
-          name,
-          downloadUrl,
-          duration: 0,
-          source: 'recorded',
-          trimStart: 0,
-          trimEnd: 0,
-          createdAt: new Date().toISOString(),
-          metadataStatus: 'processing' as const,
-        };
-        await saveVideoMutation(db.addSessionVideo(session.id, baseVid));
-
-        updateItem(i, { status: 'done', progress: 100, errorMsg: undefined });
-        summary.uploaded.push(name);
-
-        // Duración y miniatura: si fallan, el clip se queda registrado igual y se puede
-        // reintentar el análisis desde la tarjeta.
-        try {
-          const { duration, thumbnailBlob } = await getVideoMetadataFromUrl(objectUrl);
-          const thumbnailUrl = thumbnailBlob
-            ? await db.uploadSessionThumbnail(session.id, thumbnailBlob)
-            : undefined;
-
-          await saveVideoMutation(db.enrichSessionVideo(session.id, videoId, duration, thumbnailUrl));
-        } catch (metaErr) {
-          console.error('No se pudo generar la miniatura o leer la duración:', metaErr);
-          setError('No se pudo guardar la duración o miniatura del video.');
+          const current = entry;
+          db.assertSessionVideoUploadOwner(current.checkpoint);
+          updateItem(i, { status: 'uploading', progress: current.checkpoint.transferred ? 100 : 0 });
+          await runSessionUpload(current.checkpoint, {
+            transfer: async cp => {
+              // Only one file is prepared at a time; retain no copied buffers in checkpoints.
+              if (!prepared) {
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                try {
+                  await Promise.race([file.slice(0, 65536).arrayBuffer(),
+                    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('probe_timeout')), 15_000); })]);
+                  if (file.size <= 25 * 1024 * 1024) blob = new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' });
+                  prepared = true;
+                } catch { throw Object.assign(new Error('file unavailable'), { code: 'upload/file-read' }); }
+                finally { clearTimeout(timer); }
+              }
+              if (!live()) throw Object.assign(new Error('modal closed'), { code: 'upload/canceled' });
+              await db.transferSessionVideoFile(cp, blob, pct => {
+                bytes = Math.round(file.size * pct / 100);
+                updateItem(i, { progress: pct });
+              }, controller.signal);
+            },
+            getUrl: cp => {
+              if (!live()) throw Object.assign(new Error('modal closed'), { code: 'upload/canceled' });
+              return db.getSessionVideoDownloadURL(cp);
+            },
+            register: async cp => {
+              if (!live()) throw Object.assign(new Error('modal closed'), { code: 'upload/canceled' });
+              db.assertSessionVideoUploadOwner(cp);
+              const baseVid: SessionVideo = { id: cp.id, name: current.name, downloadUrl: cp.downloadUrl!,
+                duration: 0, source: 'recorded', trimStart: 0, trimEnd: 0,
+                createdAt: current.createdAt, metadataStatus: 'processing' };
+              // A null add acknowledges this stable ID already exists (e.g. response lost
+              // after commit). Publish the confirmed clip without replacing local edits.
+              await saveVideoMutation(db.addSessionVideo(session.id, baseVid).then(mutation =>
+                mutation ?? { type: 'add' as const, video: baseVid }));
+            },
+            bytes: () => bytes,
+            report: event => {
+              diagnostics.current = [...diagnostics.current, event].slice(-80);
+              if (live()) setUploadDiagnostics([...diagnostics.current]);
+              updateItem(i, { detail: `${event.phase} · intento ${event.attempt}/3${event.retry ? ' · reintentando…' : ''} · ${event.code}` });
+            },
+          });
+          current.failed = false;
+          if (!live()) break;
+          summary.uploaded.push(name);
+          updateItem(i, { status: 'done', progress: 100, errorMsg: undefined, detail: 'Preparando duración y miniatura…' });
+          let duration = 0;
+          try {
+            objectUrl = URL.createObjectURL(blob);
+            const metadata = await getVideoMetadataFromUrl(objectUrl, controller.signal);
+            duration = metadata.duration;
+            if (!live()) break;
+            let thumbnailUrl: string | undefined;
+            if (metadata.thumbnailBlob) {
+              try { thumbnailUrl = await db.uploadSessionThumbnail(session.id, metadata.thumbnailBlob); }
+              catch { if (live()) setError('Video registrado; no se pudo subir la miniatura.'); }
+            }
+            if (live()) await saveVideoMutation(db.enrichSessionVideo(session.id, current.checkpoint.id, duration, thumbnailUrl));
+          } catch { if (live()) setError('Video registrado; no se pudo guardar la duración o miniatura.'); }
+          if (live() && !current.aiStarted) {
+            current.aiStarted = true;
+            // Existing extraction only. The batch never waits for paid AI completion.
+            void triggerMetadataExtraction(current.checkpoint.id, current.checkpoint.downloadUrl!, name, duration);
+          }
+          checkpoints.current.delete(key); // Release successful File references; keep only failed work.
+          failedFilesRef.current.delete(key);
+        } catch (err) {
+          if (entry) entry.failed = true;
+          if (live()) failedFilesRef.current.set(key, file);
+          const code = uploadErrorCode(err);
+          const pending = entry?.checkpoint.transferred ? 'bytes del video subidos; registro pendiente. ' : '';
+          const msg = pending + describeUploadError(err) + ` (${code})`;
+          updateItem(i, { status: 'error', errorMsg: msg });
+          summary.errors.push({ name, message: msg });
         } finally {
-          URL.revokeObjectURL(objectUrl);
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
         }
-
-        void triggerMetadataExtraction(videoId, downloadUrl, name, 0);
-      } catch (err: any) {
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        const msg = describeUploadError(err);
-        updateItem(i, { status: 'error', errorMsg: msg });
-        summary.errors.push({ name, message: msg });
       }
+    } finally {
+      cleanup();
+      batchCleanup.current = null;
+      if (live()) {
+        setUploadSummary(summary);
+        setUploadQueue([]);
+        setFailedFiles(Array.from(failedFilesRef.current.values()));
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        setBatchUploading(false);
+      }
+      batchLock.current = false; // Release only after enrichment and queue cleanup.
     }
-
-    document.removeEventListener('visibilitychange', onVisibilityChange);
-    wl.lock?.release().catch(() => {});
-    audioCtx?.close().catch(() => {});
-
-    setUploadSummary(summary);
-    setUploadQueue([]);
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleRemoveVideo = async (id: string) => {
@@ -1096,6 +1101,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
                       <span style={{ fontSize: '0.65rem', color: '#ef4444', flexShrink: 0 }}>{item.errorMsg}</span>
                     )}
                   </div>
+                  {item.detail && <div role="status" style={{ fontSize: '0.7rem' }}>{item.detail}</div>}
                   {item.status === 'uploading' && (
                     <div style={{ height: 4, borderRadius: 4, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${item.progress}%`, background: 'var(--primary)', borderRadius: 4, transition: 'width 0.2s ease' }} />
@@ -1106,6 +1112,15 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
             </div>
           )}
 
+          {failedFiles.length > 0 && (
+            <button type="button" disabled={isUploading} onClick={() => handleFilesSelected(failedFiles, true)}>Reintentar fallidos</button>
+          )}
+          {uploadDiagnostics.length > 0 && (
+            <details>
+              <summary>Diagnóstico de subida (últimos 80 eventos; solo esta ventana)</summary>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.7rem' }}>{JSON.stringify(uploadDiagnostics, null, 2)}</pre>
+            </details>
+          )}
           {/* Upload summary */}
           {uploadSummary && (
             <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.6rem 0.75rem', fontSize: '0.78rem' }}>

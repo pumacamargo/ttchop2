@@ -1,3 +1,4 @@
+import type { UploadCheckpoint } from '../utils/sessionUploadWorkflow';
 import { auth, firestore, storage } from '../config/firebase';
 import {
   collection,
@@ -3022,50 +3023,70 @@ class DatabaseService {
     }
   }
 
-  async uploadSessionVideoFile(sessionId: string, file: File | Blob, name?: string, onProgress?: (pct: number) => void): Promise<string> {
+  createSessionVideoUpload(sessionId: string): UploadCheckpoint {
     const user = auth.currentUser;
-    if (!user) throw new Error("User not authenticated");
+    if (!user) throw Object.assign(new Error('Authentication required'), { code: 'storage/unauthenticated' });
+    const id = `vid_${crypto.randomUUID()}`;
+    return { id, userId: user.uid, sessionId,
+      path: `users/${user.uid}/sessions/${sessionId}/videos/${id}`,
+      transferred: false, registered: false };
+  }
 
-    const fileName = name ?? (file instanceof File ? file.name : `video_${Date.now()}.mp4`);
-    const path = `users/${user.uid}/sessions/${sessionId}/videos/${Date.now()}_${fileName}`;
-    const fileRef = ref(storage, path);
-
-    if (onProgress) {
-      return new Promise((resolve, reject) => {
-        const task = uploadBytesResumable(fileRef, file);
-
-        // Detector de atascos. Distingue dos casos que antes se trataban igual con 30s, lo que
-        // mataba subidas sanas: en una red móvil lenta un archivo de 70 MB puede tardar más de
-        // 30s en completar su PRIMER bloque, y el progreso se queda en 0% legítimamente.
-        //   - Antes del primer byte: se dan 3 minutos de gracia.
-        //   - Ya transfiriendo: 90s sin avanzar sí es un atasco real.
-        const FIRST_BYTE_GRACE_MS = 180_000;
-        const STALL_MS = 90_000;
-        let lastBytes = 0;
-        let lastAdvance = Date.now();
-        const stallTimer = setInterval(() => {
-          const current = task.snapshot.bytesTransferred;
-          if (current > lastBytes) { lastBytes = current; lastAdvance = Date.now(); }
-          else {
-            const limit = lastBytes === 0 ? FIRST_BYTE_GRACE_MS : STALL_MS;
-            if (Date.now() - lastAdvance > limit) {
-              clearInterval(stallTimer);
-              task.cancel();
-              reject(new Error('upload_stalled'));
-            }
-          }
-        }, 5_000);
-
-        task.on('state_changed',
-          snap => onProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-          err => { clearInterval(stallTimer); reject(err); },
-          () => { clearInterval(stallTimer); getDownloadURL(task.snapshot.ref).then(resolve).catch(reject); }
-        );
-      });
+  assertSessionVideoUploadOwner(cp: UploadCheckpoint): void {
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw Object.assign(new Error('Authentication required'), { code: 'storage/unauthenticated' });
+    if (uid !== cp.userId || cp.path !== `users/${uid}/sessions/${cp.sessionId}/videos/${cp.id}`) {
+      throw Object.assign(new Error('Upload owner changed'), { code: 'storage/unauthorized' });
     }
+  }
 
-    await uploadBytes(fileRef, file);
-    return getDownloadURL(fileRef);
+  async getSessionVideoDownloadURL(cp: UploadCheckpoint): Promise<string> {
+    this.assertSessionVideoUploadOwner(cp);
+    return getDownloadURL(ref(storage, cp.path));
+  }
+
+  async transferSessionVideoFile(cp: UploadCheckpoint, file: File | Blob, onProgress?: (pct: number) => void, signal?: AbortSignal): Promise<void> {
+    this.assertSessionVideoUploadOwner(cp);
+    if (signal?.aborted) throw Object.assign(new Error('Upload canceled'), { code: 'upload/canceled' });
+    await new Promise<void>((resolve, reject) => {
+      const task = uploadBytesResumable(ref(storage, cp.path), file);
+      // Preserve existing watchdog limits; SDK already retries resumable blocks internally.
+      const FIRST_BYTE_GRACE_MS = 180_000;
+      const STALL_MS = 90_000;
+      let lastBytes = 0;
+      let lastAdvance = Date.now();
+      let settled = false;
+      let unsubscribe: () => void = () => {};
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(stallTimer);
+        signal?.removeEventListener('abort', cancel);
+        unsubscribe();
+        if (error) reject(error); else resolve();
+      };
+      const cancel = () => { finish(Object.assign(new Error('Upload canceled'), { code: 'upload/canceled' })); task.cancel(); };
+      const stallTimer = setInterval(() => {
+        const current = task.snapshot.bytesTransferred;
+        if (current > lastBytes) { lastBytes = current; lastAdvance = Date.now(); }
+        else if (Date.now() - lastAdvance > (lastBytes === 0 ? FIRST_BYTE_GRACE_MS : STALL_MS)) {
+          finish(Object.assign(new Error('upload_stalled'), { code: 'upload/stalled' }));
+          task.cancel();
+        }
+      }, 5_000);
+      signal?.addEventListener('abort', cancel, { once: true });
+      unsubscribe = task.on('state_changed',
+        snap => onProgress?.(Math.round(snap.totalBytes ? snap.bytesTransferred / snap.totalBytes * 100 : 0)),
+        error => finish(error), () => finish());
+      if (settled) unsubscribe();
+    });
+  }
+
+  // Preserve the public API for callers outside the phased modal workflow.
+  async uploadSessionVideoFile(sessionId: string, file: File | Blob, _name?: string, onProgress?: (pct: number) => void): Promise<string> {
+    const cp = this.createSessionVideoUpload(sessionId);
+    await this.transferSessionVideoFile(cp, file, onProgress);
+    return this.getSessionVideoDownloadURL(cp);
   }
 
   async uploadSessionThumbnail(sessionId: string, blob: Blob): Promise<string> {
