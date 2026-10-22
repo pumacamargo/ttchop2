@@ -649,34 +649,37 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
   };
 
   const persistVideo = async (save: Promise<SessionVideoMutation | null>) => {
+    const scope = `${session.userId}:${session.id}`;
+    const live = () => mounted.current && activeScope.current === scope;
     pendingVideoSaves.current++;
-    setIsSaving(true);
+    if (live()) setIsSaving(true);
     try {
       return await saveVideoMutation(save);
     } catch (err) {
-      setError('Failed to save video: ' + (err instanceof Error ? err.message : String(err)));
+      if (live()) setError('Failed to save video: ' + (err instanceof Error ? err.message : String(err)));
       return false;
     } finally {
       pendingVideoSaves.current--;
-      setIsSaving(pendingVideoSaves.current > 0);
+      if (live()) setIsSaving(pendingVideoSaves.current > 0);
     }
   };
 
   const triggerMetadataExtraction = async (videoId: string, downloadUrl: string, name: string, duration: number) => {
-    const scope = `${session.userId}:${session.id}`;
+    // Capture the original operation context: closing/changing the modal only stops UI
+    // updates, not persistence. The service transaction still validates session ownership.
+    const sessionId = session.id;
+    const scope = `${session.userId}:${sessionId}`;
     const live = () => mounted.current && activeScope.current === scope;
     if (!live()) return;
     let metadata;
     try {
-      metadata = await db.extractVideoMetadata(session.id, videoId, downloadUrl, name, duration);
+      metadata = await db.extractVideoMetadata(sessionId, videoId, downloadUrl, name, duration);
     } catch {
-      if (!live()) return;
-      await persistVideo(db.patchSessionVideo(session.id, videoId, { metadataStatus: 'error' }, { ifMetadataStatus: 'processing' }));
+      await persistVideo(db.patchSessionVideo(sessionId, videoId, { metadataStatus: 'error' }, { ifMetadataStatus: 'processing' }));
       return;
     }
-    if (!live()) return;
     // A failed save is NOT an extraction failure or a local 'ready' result.
-    await persistVideo(db.patchSessionVideo(session.id, videoId,
+    await persistVideo(db.patchSessionVideo(sessionId, videoId,
       { metadataStatus: 'ready', aiMetadata: metadata }, { ifMetadataStatus: 'processing' }));
   };
 
@@ -696,12 +699,21 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     const scope = `${session.userId}:${session.id}`;
     const live = () => mounted.current && activeScope.current === scope;
     const summary = { uploaded: [] as string[], skipped: [] as string[], errors: [] as { name: string; message: string }[] };
-    const seen = new Set(videosRef.current.map(v => v.name));
+    const seen = new Map(videosRef.current.map(v => [v.name, v.id]));
+    const releaseName = (name: string) => {
+      for (const [key, pending] of checkpoints.current) {
+        if (pending.name === name) checkpoints.current.delete(key);
+      }
+      for (const [key, file] of failedFilesRef.current) {
+        if (file.name === name) failedFilesRef.current.delete(key);
+      }
+    };
     const batchNames = new Set<string>();
     const entries = files.map(file => {
       const key = JSON.stringify([scope, file.name, file.size, file.lastModified]);
       const previous = checkpoints.current.get(key);
-      const skip = batchNames.has(file.name) || (!retryFailed && seen.has(file.name)) || Boolean(previous?.checkpoint.registered);
+      const sameRegistration = retryFailed && previous?.checkpoint.id === seen.get(file.name);
+      const skip = batchNames.has(file.name) || (seen.has(file.name) && !sameRegistration) || Boolean(previous?.checkpoint.registered);
       batchNames.add(file.name);
       return { file, key, skip };
     });
@@ -743,7 +755,11 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
       for (let i = 0; i < entries.length && live(); i++) {
         const { file, key, skip } = entries[i];
         const name = file.name;
-        if (skip) { summary.skipped.push(name); continue; }
+        if (skip) {
+          summary.skipped.push(name);
+          if (videosRef.current.some(video => video.name === name)) releaseName(name);
+          continue;
+        }
         let entry = checkpoints.current.get(key);
         let objectUrl = '';
         let blob: File | Blob = file;
@@ -824,8 +840,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
             // Existing extraction only. The batch never waits for paid AI completion.
             void triggerMetadataExtraction(current.checkpoint.id, current.checkpoint.downloadUrl!, name, duration);
           }
-          checkpoints.current.delete(key); // Release successful File references; keep only failed work.
-          failedFilesRef.current.delete(key);
+          releaseName(name); // Release successful and redundant same-name File references.
         } catch (err) {
           if (entry) entry.failed = true;
           if (live()) failedFilesRef.current.set(key, file);

@@ -31,8 +31,9 @@ const file = (name: string) => ({ name, type: 'video/mp4', size: 1, lastModified
 const emptySession: any = { id: 's', userId: 'owner', name: 's', productIds: [], videos: [], createdAt: 'now' };
 function deferred() {
   let resolve!: (v?: any) => void;
-  const promise = new Promise<any>(yes => { resolve = yes; });
-  return { promise, resolve };
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<any>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
 }
 function fakeDb() {
   const calls = { transfers: [] as string[], urls: [] as string[], registrations: [] as string[], ai: [] as any[], enrich: [] as any[] };
@@ -209,23 +210,41 @@ test('diagnostics retain at most 80 events and identify the clip without URLs or
 });
 
 
-test('late AI completion after modal unmount does not persist or change local state', async () => {
-  const db = fakeDb();
-  const ai = deferred();
-  let patches = 0;
-  Object.assign(db, { getProducts: async () => [] });
-  db.extractVideoMetadata = () => ai.promise;
-  const patchVideo = db.patchSessionVideo;
-  db.patchSessionVideo = async (...args) => { patches++; return patchVideo(...args); };
-  const ui = await modal(db, emptySession, environment());
-  ui.render();
-  const unmount = ui.mountEffects();
-  await select(ui, [file('one.mp4')]);
-  unmount();
-  ai.resolve({ tag: 'late' });
-  for (let i = 0; i < 20; i++) await Promise.resolve();
-  assert.equal(patches, 0);
-});
+for (const outcome of ['success', 'failure', 'changed-user', 'save-rejected', 'deleted', 'cancelled'] as const) {
+  test(`late AI ${outcome} after modal unmount persists only the original eligible clip without UI writes`, async () => {
+    const storage = await storageService();
+    const db = fakeDb();
+    const ai = deferred();
+    Object.assign(db, {
+      getProducts: async () => [],
+      addSessionVideo: storage.db.addSessionVideo.bind(storage.db),
+      enrichSessionVideo: storage.db.enrichSessionVideo.bind(storage.db),
+      patchSessionVideo: storage.db.patchSessionVideo.bind(storage.db),
+      extractVideoMetadata: () => ai.promise,
+    });
+    const ui = await modal(db, emptySession, environment());
+    ui.render();
+    const unmount = ui.mountEffects();
+    await select(ui, [file('one.mp4')]);
+    assert.equal(storage.data.videos[0].metadataStatus, 'processing');
+    unmount();
+    const localWrites = ui.stateWrites;
+    if (outcome === 'changed-user') storage.auth.currentUser = { uid: 'other' };
+    if (outcome === 'save-rejected') storage.rejectWrites();
+    if (outcome === 'deleted') await storage.db.removeSessionVideo('s', 'vid-1');
+    if (outcome === 'cancelled') await storage.db.patchSessionVideo('s', 'vid-1', {}, { clearMetadataStatus: true });
+    if (outcome === 'failure') ai.reject(new Error('extraction failed'));
+    else ai.resolve({ tag: 'late' });
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    const video = storage.data.videos[0];
+    if (outcome === 'deleted') assert.equal(video, undefined);
+    else if (outcome === 'cancelled') assert.equal(video.metadataStatus, undefined);
+    else assert.equal(video.metadataStatus, outcome === 'success' ? 'ready' : outcome === 'failure' ? 'error' : 'processing');
+    if (outcome === 'success') assert.deepEqual(video.aiMetadata, { tag: 'late' });
+    assert.equal(ui.stateWrites, localWrites, 'no state setter, including saving/error, may run after unmount');
+    assert.equal(ui.render().find((n: any) => n.props?.video).props.video.metadataStatus, 'processing');
+  });
+}
 
 // Compile the real service with Firebase boundary stubs; no network/client initialization.
 async function storageService() {
@@ -234,6 +253,8 @@ async function storageService() {
   const vm = await import('node:vm');
   const ts = createRequire(import.meta.url)('typescript');
   const auth = { currentUser: { uid: 'owner' } as { uid: string } | null };
+  const helper = await import('../src/utils/sessionVideoMutations.ts');
+  let data = structuredClone(emptySession), rejectWrites = false;
   const timers = new Set<any>();
   const tasks: any[] = [];
   const urls: string[] = [];
@@ -258,11 +279,24 @@ async function storageService() {
         },
         async getDownloadURL(path: string) { urls.push(path); if (urlFail) throw transient(); return 'private'; },
       };
-      if (['firebase/firestore', 'xlsx'].includes(id) || id.startsWith('../utils/')) return {};
+      if (id === 'firebase/firestore') return {
+        doc(_db: any, _collection: string, sessionId: string) { return sessionId; },
+        async runTransaction(_db: any, callback: any) {
+          let pending: any;
+          const result = await callback({
+            async get() { return { exists: () => true, data: () => structuredClone(data) }; },
+            update(_ref: any, changes: any) { if (rejectWrites) throw new Error('save rejected'); pending = changes; },
+          });
+          if (pending) data = { ...data, ...pending };
+          return result;
+        },
+      };
+      if (id.endsWith('/sessionVideoMutations')) return helper;
+      if (id === 'xlsx' || id.startsWith('../utils/')) return {};
       throw new Error('Unexpected service dependency: ' + id);
     },
   });
-  return { db: exports.db, auth, tasks, timers, urls, advance(ms: number) { now += ms; [...timers].forEach(fn => fn()); },
+  return { db: exports.db, auth, get data() { return data; }, rejectWrites() { rejectWrites = true; }, tasks, timers, urls, advance(ms: number) { now += ms; [...timers].forEach(fn => fn()); },
     failUrl(value: boolean) { urlFail = value; } };
 }
 
@@ -435,16 +469,30 @@ test('registration acknowledgement lost after server commit is shown locally aft
 
 
 test('retry-failed batches also skip duplicate names within that batch', async () => {
+  const storage = await storageService();
   const db = fakeDb();
   const register = db.addSessionVideo;
   let fail = true;
-  db.addSessionVideo = async (s, video) => { if (fail) throw Object.assign(new Error('pending'), { code: 'permission-denied' }); return register(s, video); };
+  db.addSessionVideo = async (s, video) => {
+    if (fail) throw Object.assign(new Error('pending'), { code: 'permission-denied' });
+    await register(s, video);
+    return storage.db.addSessionVideo(s, video);
+  };
   const ui = await modal(db, emptySession, environment());
   const first = file('same.mp4'), second = { ...file('same.mp4'), lastModified: 13 };
   await select(ui, [first]);
   await select(ui, [second]);
   fail = false;
-  await button(ui, 'Reintentar fallidos').props.onClick();
+  const retry = button(ui, 'Reintentar fallidos').props.onClick;
+  await retry();
+  const retainedRetry = button(ui, 'Reintentar fallidos');
+  // Exercise a second retry too, including a stale callback after reconciliation.
+  await (retainedRetry?.props.onClick ?? retry)();
   assert.equal(db.calls.registrations.length, 1);
   assert.equal(db.calls.transfers.length, 2);
+  assert.equal(db.calls.ai.length, 1);
+  assert.deepEqual(storage.data.videos.map((video: any) => video.name), ['same.mp4']);
+  assert.deepEqual(ui.render().filter((n: any) => n.props?.video).map((n: any) => n.props.video.name), ['same.mp4']);
+  assert.equal(retainedRetry, undefined, 'success releases all same-name failed Files/checkpoints');
+  assert.equal(button(ui, 'Reintentar fallidos'), undefined);
 });

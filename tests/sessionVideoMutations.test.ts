@@ -183,11 +183,12 @@ export async function modal(database: any, initial = session(), environment: any
   let cursor = 0;
   const slots: any[] = [];
   const effects: any[] = [];
+  let stateWrites = 0;
   const hooks = {
     useState(initial: any) {
       const i = cursor++;
       if (!(i in slots)) slots[i] = initial;
-      return [slots[i], (v: any) => { slots[i] = typeof v === 'function' ? v(slots[i]) : v; }];
+      return [slots[i], (v: any) => { stateWrites++; slots[i] = typeof v === 'function' ? v(slots[i]) : v; }];
     },
     useRef(initial: any) {
       const i = cursor++;
@@ -230,7 +231,7 @@ export async function modal(database: any, initial = session(), environment: any
     walk(tree);
     return nodes;
   }
-  return { render, card: () => render().find(n => n.props?.video?.id === 'a'),
+  return { render, get stateWrites() { return stateWrites; }, card: () => render().find(n => n.props?.video?.id === 'a'),
     mountEffects() { const cleanups = effects.splice(0).map(effect => effect()); return () => cleanups.forEach(cleanup => cleanup?.()); },
   };
 }
