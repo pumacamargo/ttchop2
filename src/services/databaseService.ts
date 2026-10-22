@@ -22,6 +22,8 @@ import type { ParsedAnalyticsOrder } from './analyticsImport';
 
 import * as XLSX from 'xlsx';
 import { planCarouselSeedWrites } from '../utils/carouselTemplateSeedPlan';
+import { mutateSessionVideoTransaction } from '../utils/sessionVideoMutations';
+import type { SessionVideoMutation } from '../utils/sessionVideoMutations';
 // Pure, framework-free filtering logic lives in utils so every view can unit test it without
 // pulling in Firebase — re-exported here so callers of this service don't need a second import.
 export { getVisibleForContainer, isGeneralContainer, getEffectiveContainer } from '../utils/containerVisibility';
@@ -2937,6 +2939,40 @@ class DatabaseService {
 
     const docRef = doc(firestore, 'sessions', sessionId);
     await updateDoc(docRef, updates);
+  }
+
+  // Keep updateSession generic for other callers. Clip mutations must read the latest
+  // document inside each transaction attempt, and return only the committed intent.
+  private async mutateSessionVideo(sessionId: string, mutation: SessionVideoMutation): Promise<SessionVideoMutation | null> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+    const sessionRef = doc(firestore, 'sessions', sessionId);
+    return runTransaction(firestore, transaction => mutateSessionVideoTransaction({
+      async read() {
+        const snapshot = await transaction.get(sessionRef);
+        return snapshot.exists() ? snapshot.data() as Session : undefined;
+      },
+      write(videos) { transaction.update(sessionRef, { videos }); },
+    }, user.uid, sessionId, mutation));
+  }
+
+  async addSessionVideo(sessionId: string, video: SessionVideo): Promise<SessionVideoMutation | null> {
+    return this.mutateSessionVideo(sessionId, { type: 'add', video });
+  }
+
+  async patchSessionVideo(
+    sessionId: string, id: string, changes: Partial<Omit<SessionVideo, 'id'>>,
+    options: { clearMetadataStatus?: boolean; ifMetadataStatus?: SessionVideo['metadataStatus'] } = {},
+  ): Promise<SessionVideoMutation | null> {
+    return this.mutateSessionVideo(sessionId, { type: 'patch', id, changes, ...options });
+  }
+
+  async enrichSessionVideo(sessionId: string, id: string, duration: number, thumbnailUrl?: string): Promise<SessionVideoMutation | null> {
+    return this.mutateSessionVideo(sessionId, { type: 'enrich', id, duration, ...(thumbnailUrl ? { thumbnailUrl } : {}) });
+  }
+
+  async removeSessionVideo(sessionId: string, id: string): Promise<SessionVideoMutation | null> {
+    return this.mutateSessionVideo(sessionId, { type: 'remove', id });
   }
 
   async deleteSession(sessionId: string): Promise<void> {

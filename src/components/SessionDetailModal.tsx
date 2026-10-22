@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { db, REGION_LABELS } from '../services/databaseService';
 import type { Product, Session, SessionVideo } from '../services/databaseService';
+import { applySessionVideoMutation, commitSessionVideoMutation } from '../utils/sessionVideoMutations';
+import type { SessionVideoMutation } from '../utils/sessionVideoMutations';
 import { ArrowLeft, Trash2, RefreshCw, UploadCloud, Scissors, Play, Pause, Volume2, VolumeX, Edit2, Check, X as XIcon } from 'lucide-react';
 import { useT } from '../context/LanguageContext';
 
@@ -615,40 +617,49 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     }
   };
 
-  const applyVideos = (updated: SessionVideo[]) => {
-    videosRef.current = updated;
-    setVideos(updated);
-  };
+  const pendingVideoSaves = useRef(0);
 
-  const persistVideos = async (updated: SessionVideo[]) => {
+  const saveVideoMutation = (save: Promise<SessionVideoMutation | null>) =>
+    commitSessionVideoMutation(save, mutation => {
+      // An older save can finish after another clip was added, trimmed or deleted.
+      // Merge only this operation into the CURRENT state, never its snapshot array.
+      const updated = applySessionVideoMutation(videosRef.current, mutation);
+      videosRef.current = updated;
+      setVideos(updated);
+    });
+
+  const persistVideo = async (save: Promise<SessionVideoMutation | null>) => {
+    pendingVideoSaves.current++;
     setIsSaving(true);
-    setError('');
     try {
-      await db.updateSession(session.id, { videos: updated });
-      applyVideos(updated);
-    } catch (err: any) {
-      setError('Failed to save video: ' + (err.message || ''));
+      return await saveVideoMutation(save);
+    } catch (err) {
+      setError('Failed to save video: ' + (err instanceof Error ? err.message : String(err)));
+      return false;
     } finally {
-      setIsSaving(false);
+      pendingVideoSaves.current--;
+      setIsSaving(pendingVideoSaves.current > 0);
     }
   };
 
-  const triggerMetadataExtraction = (videoId: string, downloadUrl: string, name: string, duration: number) => {
-    db.extractVideoMetadata(session.id, videoId, downloadUrl, name, duration)
-      .then(metadata => {
-        const updated = videosRef.current.map(v =>
-          v.id === videoId ? { ...v, metadataStatus: 'ready' as const, aiMetadata: metadata } : v
-        );
-        applyVideos(updated);
-        db.updateSession(session.id, { videos: updated });
-      })
-      .catch(() => {
-        const updated = videosRef.current.map(v =>
-          v.id === videoId ? { ...v, metadataStatus: 'error' as const } : v
-        );
-        applyVideos(updated);
-        db.updateSession(session.id, { videos: updated });
-      });
+  const triggerMetadataExtraction = async (videoId: string, downloadUrl: string, name: string, duration: number) => {
+    let metadata;
+    try {
+      metadata = await db.extractVideoMetadata(session.id, videoId, downloadUrl, name, duration);
+    } catch {
+      await persistVideo(db.patchSessionVideo(session.id, videoId, { metadataStatus: 'error' }, { ifMetadataStatus: 'processing' }));
+      return;
+    }
+    // A failed save is NOT an extraction failure or a local 'ready' result.
+    await persistVideo(db.patchSessionVideo(session.id, videoId,
+      { metadataStatus: 'ready', aiMetadata: metadata }, { ifMetadataStatus: 'processing' }));
+  };
+
+  const handleRetryMetadata = async (video: SessionVideo) => {
+    setError('');
+    if (await persistVideo(db.patchSessionVideo(session.id, video.id, { metadataStatus: 'processing' }))) {
+      await triggerMetadataExtraction(video.id, video.downloadUrl, video.name, video.duration);
+    }
   };
 
   const handleFilesSelected = async (fileList: FileList | null) => {
@@ -797,9 +808,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
           createdAt: new Date().toISOString(),
           metadataStatus: 'processing' as const,
         };
-        const merged = [...videosRef.current, baseVid];
-        await db.updateSession(session.id, { videos: merged });
-        applyVideos(merged);
+        await saveVideoMutation(db.addSessionVideo(session.id, baseVid));
 
         updateItem(i, { status: 'done', progress: 100, errorMsg: undefined });
         summary.uploaded.push(name);
@@ -812,18 +821,15 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
             ? await db.uploadSessionThumbnail(session.id, thumbnailBlob)
             : undefined;
 
-          const enriched = videosRef.current.map(v => v.id === videoId
-            ? { ...v, duration, trimEnd: duration || 0, ...(thumbnailUrl && { thumbnailUrl }) }
-            : v);
-          await db.updateSession(session.id, { videos: enriched });
-          applyVideos(enriched);
+          await saveVideoMutation(db.enrichSessionVideo(session.id, videoId, duration, thumbnailUrl));
         } catch (metaErr) {
           console.error('No se pudo generar la miniatura o leer la duración:', metaErr);
+          setError('No se pudo guardar la duración o miniatura del video.');
         } finally {
           URL.revokeObjectURL(objectUrl);
         }
 
-        triggerMetadataExtraction(videoId, downloadUrl, name, 0);
+        void triggerMetadataExtraction(videoId, downloadUrl, name, 0);
       } catch (err: any) {
         if (objectUrl) URL.revokeObjectURL(objectUrl);
         const msg = describeUploadError(err);
@@ -841,12 +847,14 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleRemoveVideo = (id: string) => {
-    persistVideos(videos.filter(v => v.id !== id));
+  const handleRemoveVideo = async (id: string) => {
+    setError('');
+    await persistVideo(db.removeSessionVideo(session.id, id));
   };
 
-  const handleTrimSave = (id: string, trimStart: number, trimEnd: number) => {
-    persistVideos(videos.map(v => (v.id === id ? { ...v, trimStart, trimEnd } : v)));
+  const handleTrimSave = async (id: string, trimStart: number, trimEnd: number) => {
+    setError('');
+    await persistVideo(db.patchSessionVideo(session.id, id, { trimStart, trimEnd }));
   };
 
   const handleRename = async () => {
@@ -977,13 +985,8 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
               <button
                 type="button"
                 disabled={isSaving}
-                onClick={() => {
-                  const updated = videosRef.current.map(x =>
-                    unanalyzed.some(u => u.id === x.id) ? { ...x, metadataStatus: 'processing' as const } : x
-                  );
-                  applyVideos(updated);
-                  db.updateSession(session.id, { videos: updated });
-                  unanalyzed.forEach(v => triggerMetadataExtraction(v.id, v.downloadUrl, v.name, v.duration));
+                onClick={async () => {
+                  await Promise.all(unanalyzed.map(handleRetryMetadata));
                 }}
                 style={{
                   background: 'rgba(234,179,8,0.2)', border: '1px solid rgba(234,179,8,0.4)',
@@ -1013,16 +1016,11 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
                 disabled={isSaving}
                 onRemove={() => handleRemoveVideo(video.id)}
                 onTrimSave={(trimStart, trimEnd) => handleTrimSave(video.id, trimStart, trimEnd)}
-                onRetry={(!video.metadataStatus || video.metadataStatus === 'error') ? () => {
-                  const updated = videosRef.current.map(v => v.id === video.id ? { ...v, metadataStatus: 'processing' as const } : v);
-                  applyVideos(updated);
-                  db.updateSession(session.id, { videos: updated });
-                  triggerMetadataExtraction(video.id, video.downloadUrl, video.name, video.duration);
-                } : undefined}
-                onCancel={video.metadataStatus === 'processing' ? () => {
-                  const updated = videosRef.current.map(v => v.id === video.id ? { ...v, metadataStatus: undefined } : v);
-                  applyVideos(updated);
-                  db.updateSession(session.id, { videos: updated });
+                onRetry={(!video.metadataStatus || video.metadataStatus === 'error')
+                  ? () => handleRetryMetadata(video) : undefined}
+                onCancel={video.metadataStatus === 'processing' ? async () => {
+                  setError('');
+                  await persistVideo(db.patchSessionVideo(session.id, video.id, {}, { clearMetadataStatus: true }));
                 } : undefined}
               />
             ))}
