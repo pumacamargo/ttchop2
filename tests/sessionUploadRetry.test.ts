@@ -110,7 +110,7 @@ for (const phase of ['download-url', 'registration'] as const) {
     assert.equal(JSON.stringify(events).includes('secret'), false);
   });
 }
-for (const code of ['storage/unauthenticated', 'storage/unauthorized', 'storage/quota-exceeded', 'upload/file-read', 'storage/unknown']) {
+for (const code of ['storage/unauthenticated', 'storage/unauthorized', 'storage/quota-exceeded', 'upload/file-probe-read', 'upload/file-probe-timeout', 'upload/file-copy-read', 'upload/file-copy-timeout', 'storage/unknown']) {
   test(`${code} is attempted once and preserves the original error`, async () => {
     const { runSessionUpload } = await import(url.href);
     const error = Object.assign(new Error('private details'), { code });
@@ -182,20 +182,25 @@ test('thumbnail upload failure still saves duration and passes it to the existin
   assert.equal(button(ui, 'Reintentar fallidos'), undefined);
 });
 
-test('failed file read is not automatically retried, keeps the batch usable, and needs no reselection', async () => {
+test('persistent local read failure is bounded, keeps batch usable, and manual retry retains its ID', async () => {
   const db = fakeDb();
   const bad = file('bad.mp4');
-  let reads = 0;
-  bad.slice = () => ({ async arrayBuffer() { reads++; throw new Error('private'); } });
+  let reads = 0, fail = true;
+  bad.slice = () => ({ async arrayBuffer() { reads++; if (fail) throw Object.assign(new Error('https://secret?token=SECRET'), { name: 'NotReadableError' }); return new ArrayBuffer(1); } });
   const ui = await modal(db, emptySession, environment());
   await select(ui, [bad, file('good.mp4')]);
-  assert.equal(reads, 1);
-  assert.equal(db.calls.transfers.length, 1);
+  assert.equal(reads, 3);
+  assert.deepEqual(db.calls.transfers, ['vid-2']);
+  assert.ok(text(ui).includes('upload/file-probe-read'));
+  assert.ok(text(ui).includes('aunque esté guardado en este dispositivo'));
+  assert.equal(text(ui).includes('SECRET'), false);
   assert.ok(button(ui, 'Reintentar fallidos'));
+  fail = false;
   await button(ui, 'Reintentar fallidos').props.onClick();
-  assert.equal(reads, 2);
-  assert.equal(db.calls.transfers.length, 1);
-  assert.equal(db.calls.ai.length, 1);
+  assert.equal(reads, 4);
+  assert.deepEqual(db.calls.transfers, ['vid-2', 'vid-1']);
+  assert.equal(db.calls.ai.length, 2);
+  assert.equal(button(ui, 'Reintentar fallidos'), undefined);
 });
 
 test('diagnostics retain at most 80 events and identify the clip without URLs or file names', async () => {
@@ -414,7 +419,7 @@ test('unmount during local metadata releases its timer and object URL without la
   const db = fakeDb();
   Object.assign(db, { getProducts: async () => [] });
   const timers = new Set<any>();
-  let revokes = 0, settled = false;
+  let creates = 0, revokes = 0, settled = false;
   const env = environment();
   const create = env.document.createElement;
   env.document.createElement = tag => {
@@ -422,13 +427,14 @@ test('unmount during local metadata releases its timer and object URL without la
     return { pause() {}, removeAttribute() {}, load() {} };
   };
   const ui = await modal(db, emptySession, { ...env,
-    URL: { createObjectURL: () => 'blob:test', revokeObjectURL() { revokes++; } },
+    URL: { createObjectURL() { creates++; return 'blob:test'; }, revokeObjectURL() { revokes++; } },
     setTimeout(fn: any) { timers.add(fn); return fn; }, clearTimeout(fn: any) { timers.delete(fn); },
   });
   ui.render();
   const unmount = ui.mountEffects();
   const pending = select(ui, [file('one.mp4')]).then(() => { settled = true; });
-  for (let i = 0; i < 30; i++) await Promise.resolve();
+  for (let i = 0; i < 100 && creates === 0; i++) await Promise.resolve();
+  assert.equal(creates, 1);
   assert.equal(timers.size, 1);
   unmount();
   for (let i = 0; i < 30; i++) await Promise.resolve();
@@ -494,5 +500,174 @@ test('retry-failed batches also skip duplicate names within that batch', async (
   assert.deepEqual(storage.data.videos.map((video: any) => video.name), ['same.mp4']);
   assert.deepEqual(ui.render().filter((n: any) => n.props?.video).map((n: any) => n.props.video.name), ['same.mp4']);
   assert.equal(retainedRetry, undefined, 'success releases all same-name failed Files/checkpoints');
+  assert.equal(button(ui, 'Reintentar fallidos'), undefined);
+});
+
+
+test('actual modal recovers first failed local probe for EACH sequential file without reselection', async () => {
+  const db = fakeDb();
+  const reads = [0, 0];
+  const files = ['first.mp4', 'second.mp4'].map((name, index) => {
+    const selected = file(name);
+    selected.slice = () => ({ async arrayBuffer() {
+      reads[index]++;
+      if (reads[index] === 1) throw Object.assign(new Error('https://secret?token=SECRET'), { name: 'NotReadableError' });
+      return new ArrayBuffer(1);
+    } });
+    return selected;
+  });
+  const ui = await modal(db, emptySession, environment());
+  await select(ui, files);
+  assert.deepEqual(db.calls.transfers, ['vid-1', 'vid-2']);
+  assert.deepEqual(reads, [2, 2]);
+  assert.deepEqual(db.calls.registrations, ['vid-1', 'vid-2']);
+  assert.equal(db.calls.ai.length, 2);
+  assert.equal(button(ui, 'Reintentar fallidos'), undefined);
+  assert.equal(text(ui).includes('SECRET'), false);
+});
+
+
+// Abortable FileReader boundary and deterministic clock; actual helper + actual TSX run unchanged.
+function controlledReads(phase: 'file-probe' | 'file-copy', kind: 'read' | 'timeout') {
+  const timers = new Map<any, { fn: () => void; ms: number }>();
+  const readers: any[] = [];
+  const fired: number[] = [];
+  const attempts: string[] = [];
+  let fail = true, active = 0, maxActive = 0, aborts = 0;
+  class Reader {
+    result: any = null; readyState = 0; onload: any; onerror: any; onabort: any;
+    readAsArrayBuffer(blob: any) {
+      assert.equal(active, 0, 'no overlapping uncancellable reads or copies');
+      active++; maxActive = Math.max(maxActive, active); this.readyState = 1;
+      readers.push(this);
+      const current = blob.name ? 'file-copy' : 'file-probe';
+      attempts.push(current);
+      if (fail && current === phase) {
+        if (kind === 'read') queueMicrotask(() => {
+          if (this.readyState !== 1) return;
+          active--; this.readyState = 2; this.onerror?.({ message: 'https://secret?token=SECRET' });
+        });
+        return;
+      }
+      blob.arrayBuffer().then((buffer: ArrayBuffer) => {
+        if (this.readyState !== 1) return;
+        active--; this.readyState = 2; this.result = buffer; this.onload?.();
+      });
+    }
+    abort() { if (this.readyState === 1) { active--; aborts++; } this.readyState = 2; this.result = null; this.onabort?.(); }
+  }
+  const env = { ...environment(), FileReader: Reader,
+    setTimeout(fn: () => void, ms: number) { const id = {}; timers.set(id, { fn, ms }); return id; },
+    clearTimeout(id: any) { timers.delete(id); },
+  };
+  async function flush() { for (let i = 0; i < 100; i++) await Promise.resolve(); }
+  async function complete(pending: Promise<any>) {
+    let settled = false;
+    pending.then(() => { settled = true; });
+    for (let i = 0; i < 100 && !settled; i++) {
+      await flush();
+      if (settled) break;
+      const next = timers.entries().next().value;
+      assert.ok(next, 'operation must progress or have a bounded timer');
+      timers.delete(next[0]); fired.push(next[1].ms); next[1].fn();
+    }
+    assert.equal(settled, true, 'bounded read operation settles');
+    await pending;
+  }
+  return { env, attempts, timers, readers, fired, flush, complete, recover() { fail = false; },
+    get maxActive() { return maxActive; }, get active() { return active; }, get aborts() { return aborts; } };
+}
+for (const phase of ['file-probe', 'file-copy'] as const) {
+  for (const kind of ['read', 'timeout'] as const) {
+    test(`actual modal bounds persistent ${phase} ${kind} then manual retry reuses stable checkpoint`, async () => {
+      const db = fakeDb(), clock = controlledReads(phase, kind);
+      const ui = await modal(db, emptySession, clock.env);
+      await clock.complete(select(ui, [file('private.mp4')]));
+      assert.equal(clock.attempts.filter(p => p === phase).length, 3);
+      assert.equal(db.calls.transfers.length, 0);
+      assert.equal(db.calls.ai.length, 0);
+      assert.deepEqual(clock.fired, kind === 'timeout' ? [15000, 200, 15000, 400, 15000] : [200, 400]);
+      const code = `upload/${phase}-${kind}`;
+      const events = JSON.parse(ui.render().find((n: any) => n.type === 'pre').props.children);
+      assert.deepEqual(events.filter((e: any) => e.code === code).map((e: any) => [e.phase, e.attempt, e.retry]),
+        [[phase, 1, true], [phase, 2, true], [phase, 3, false]]);
+      assert.ok(text(ui).includes(kind === 'timeout' ? 'tardó demasiado' : 'aunque esté guardado'));
+      assert.equal(JSON.stringify(events).includes('private'), false);
+      assert.equal(JSON.stringify(events).includes('SECRET'), false);
+      assert.equal(clock.aborts, kind === 'timeout' ? 3 : 0);
+      clock.recover();
+      await clock.complete(button(ui, 'Reintentar fallidos').props.onClick());
+      assert.deepEqual(db.calls.transfers, ['vid-1']);
+      assert.deepEqual(db.calls.registrations, ['vid-1']);
+      assert.equal(db.calls.ai.length, 1);
+      assert.equal(clock.maxActive, 1);
+      assert.equal(clock.active, 0);
+      assert.equal(clock.timers.size, 0);
+      assert.ok(clock.readers.every(r => r.onload === null && r.onerror === null && r.onabort === null));
+      assert.equal(button(ui, 'Reintentar fallidos'), undefined);
+    });
+  }
+  for (const stage of ['active-read', 'retry-delay'] as const) {
+    test(`unmount during ${phase} ${stage} aborts without continuing reads or next file`, async () => {
+      const db = fakeDb(), clock = controlledReads(phase, stage === 'active-read' ? 'timeout' : 'read');
+      Object.assign(db, { getProducts: async () => [] });
+      const ui = await modal(db, emptySession, clock.env);
+      ui.render(); const unmount = ui.mountEffects();
+      const pending = select(ui, [file('first.mp4'), file('second.mp4')]);
+      await clock.flush();
+      assert.equal(clock.timers.size, 1);
+      assert.equal([...clock.timers.values()][0].ms, stage === 'active-read' ? 15000 : 200);
+      const before = clock.attempts.length;
+      unmount(); const writes = ui.stateWrites;
+      await clock.complete(pending);
+      await clock.flush();
+      assert.equal(clock.attempts.length, before);
+      assert.equal(clock.active, 0);
+      assert.equal(clock.timers.size, 0);
+      assert.equal(db.calls.transfers.length, 0);
+      assert.equal(db.calls.ai.length, 0);
+      assert.equal(ui.stateWrites, writes);
+    });
+  }
+}
+
+test('actual modal probes large files without full copy and prepares bounded copies sequentially', async () => {
+  const db = fakeDb();
+  let current = 0, max = 0;
+  const fullReads: string[] = [], probes: number[] = [];
+  const files = [25 * 1024 * 1024, 25 * 1024 * 1024 + 1, 1].map((size, i) => ({
+    ...file(`${i}.mp4`), size,
+    async arrayBuffer() { fullReads.push(`${i}`); current++; max = Math.max(max, current); await Promise.resolve(); current--; return new ArrayBuffer(1); },
+    slice(start: number, end: number) { probes.push(end - start); return { async arrayBuffer() { return new ArrayBuffer(1); } }; },
+  }));
+  const transferred: any[] = [];
+  db.transferSessionVideoFile = async (cp: any, blob?: any) => { db.calls.transfers.push(cp.id); transferred.push(blob); };
+  const ui = await modal(db, emptySession, environment());
+  await select(ui, files);
+  assert.deepEqual(fullReads, ['0', '2']);
+  assert.deepEqual(probes, [65536, 65536, 65536]);
+  assert.equal(max, 1);
+  assert.equal(transferred[1], files[1]);
+  assert.ok(transferred[0] instanceof Blob);
+  assert.ok(transferred[2] instanceof Blob);
+  assert.equal(db.calls.transfers.length, 3);
+  assert.equal(db.calls.ai.length, 3);
+});
+
+
+test('actual modal recovers first full-copy read rejection for each sequential file without duplicate transfer or AI', async () => {
+  const db = fakeDb(), reads = [0, 0];
+  const files = ['first.mp4', 'second.mp4'].map((name, i) => ({ ...file(name),
+    async arrayBuffer() {
+      if (++reads[i] === 1) throw Object.assign(new Error('private-token'), { name: 'NotReadableError' });
+      return new ArrayBuffer(1);
+    },
+  }));
+  const ui = await modal(db, emptySession, environment());
+  await select(ui, files);
+  assert.deepEqual(reads, [2, 2]);
+  assert.deepEqual(db.calls.transfers, ['vid-1', 'vid-2']);
+  assert.deepEqual(db.calls.registrations, ['vid-1', 'vid-2']);
+  assert.equal(db.calls.ai.length, 2);
   assert.equal(button(ui, 'Reintentar fallidos'), undefined);
 });

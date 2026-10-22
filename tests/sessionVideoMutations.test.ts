@@ -180,6 +180,22 @@ export async function modal(database: any, initial = session(), environment: any
   const helper = await import(helperUrl.href);
   const workflowUrl = new URL('../src/utils/sessionUploadWorkflow.ts', import.meta.url);
   const workflow = existsSync(workflowUrl) ? await import(workflowUrl.href) : {};
+  const readExports: any = {};
+  const Reader = environment.FileReader ?? class {
+    result: any; onload: any; onerror: any; onabort: any; readyState = 0;
+    readAsArrayBuffer(blob: any) {
+      this.readyState = 1;
+      Promise.resolve().then(() => blob.arrayBuffer()).then(result => {
+        if (this.readyState !== 1) return;
+        this.readyState = 2; this.result = result; this.onload?.();
+      }, () => { if (this.readyState === 1) { this.readyState = 2; this.onerror?.(); } });
+    }
+    abort() { this.readyState = 2; this.result = null; this.onabort?.(); }
+  };
+  vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/utils/prepareSessionUploadFile.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: readExports, Blob, FileReader: Reader,
+    setTimeout(fn: any, ms: number) { if (ms <= 500) queueMicrotask(fn); return fn; }, clearTimeout() {}, ...environment });
   let cursor = 0;
   const slots: any[] = [];
   const effects: any[] = [];
@@ -214,6 +230,7 @@ export async function modal(database: any, initial = session(), environment: any
     if (id.endsWith('/databaseService')) return { db: database, REGION_LABELS: {} };
     if (id.endsWith('/sessionVideoMutations')) return helper;
     if (id.endsWith('/sessionUploadWorkflow')) return workflow;
+    if (id.endsWith('/prepareSessionUploadFile')) return readExports;
     if (id === 'lucide-react') return {};
     if (id.endsWith('/LanguageContext')) return { useT: () => ({}) };
     throw new Error('Unexpected component dependency: ' + id);

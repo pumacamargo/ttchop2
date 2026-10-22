@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { db, REGION_LABELS } from '../services/databaseService';
 import type { Product, Session, SessionVideo } from '../services/databaseService';
 import { applySessionVideoMutation, commitSessionVideoMutation } from '../utils/sessionVideoMutations';
+import { prepareSessionUploadFile } from '../utils/prepareSessionUploadFile';
 import { runSessionUpload, uploadErrorCode } from '../utils/sessionUploadWorkflow';
 import type { UploadCheckpoint, UploadDiagnostic } from '../utils/sessionUploadWorkflow';
 import type { SessionVideoMutation } from '../utils/sessionVideoMutations';
@@ -83,7 +84,10 @@ function describeUploadError(err: unknown): string {
     case 'storage/unauthorized':
     case 'permission-denied': return 'No tienes permiso para completar esta operación.';
     case 'storage/quota-exceeded': return 'Se agotó la cuota de almacenamiento.';
-    case 'upload/file-read': return 'No se pudo leer el archivo. Descárgalo al dispositivo y vuelve a seleccionarlo.';
+    case 'upload/file-probe-timeout':
+    case 'upload/file-copy-timeout': return 'La lectura del archivo tardó demasiado tras 3 intentos. Puedes reintentar los fallidos o volver a seleccionarlo.';
+    case 'upload/file-probe-read':
+    case 'upload/file-copy-read': return 'No se pudo leer el archivo tras 3 intentos, aunque esté guardado en este dispositivo. Puedes reintentar los fallidos o volver a seleccionarlo.';
     default: return 'No se pudo completar esta fase. Puedes reintentar los fallidos.';
   }
 }
@@ -763,7 +767,6 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
         let entry = checkpoints.current.get(key);
         let objectUrl = '';
         let blob: File | Blob = file;
-        let prepared = false;
         let bytes = entry?.checkpoint.transferred ? file.size : 0;
         try {
           if (!entry) {
@@ -777,19 +780,19 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
           const current = entry;
           db.assertSessionVideoUploadOwner(current.checkpoint);
           updateItem(i, { status: 'uploading', progress: current.checkpoint.transferred ? 100 : 0 });
+          const reportUpload = (event: UploadDiagnostic) => {
+            diagnostics.current = [...diagnostics.current, event].slice(-80);
+            if (live()) setUploadDiagnostics([...diagnostics.current]);
+            updateItem(i, { detail: `${event.phase} · intento ${event.attempt}/3${event.retry ? ' · reintentando…' : ''} · ${event.code}` });
+          };
+          // One bounded copy at a time, reused by all transfer retries, never checkpointed.
+          if (!current.checkpoint.transferred) {
+            blob = await prepareSessionUploadFile(file, controller.signal, event => reportUpload({
+              ...event, clipId: current.checkpoint.id, bytes: 0,
+            }));
+          }
           await runSessionUpload(current.checkpoint, {
             transfer: async cp => {
-              // Only one file is prepared at a time; retain no copied buffers in checkpoints.
-              if (!prepared) {
-                let timer: ReturnType<typeof setTimeout> | undefined;
-                try {
-                  await Promise.race([file.slice(0, 65536).arrayBuffer(),
-                    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('probe_timeout')), 15_000); })]);
-                  if (file.size <= 25 * 1024 * 1024) blob = new Blob([await file.arrayBuffer()], { type: file.type || 'video/mp4' });
-                  prepared = true;
-                } catch { throw Object.assign(new Error('file unavailable'), { code: 'upload/file-read' }); }
-                finally { clearTimeout(timer); }
-              }
               if (!live()) throw Object.assign(new Error('modal closed'), { code: 'upload/canceled' });
               await db.transferSessionVideoFile(cp, blob, pct => {
                 bytes = Math.round(file.size * pct / 100);
@@ -812,11 +815,7 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ session,
                 mutation ?? { type: 'add' as const, video: baseVid }));
             },
             bytes: () => bytes,
-            report: event => {
-              diagnostics.current = [...diagnostics.current, event].slice(-80);
-              if (live()) setUploadDiagnostics([...diagnostics.current]);
-              updateItem(i, { detail: `${event.phase} · intento ${event.attempt}/3${event.retry ? ' · reintentando…' : ''} · ${event.code}` });
-            },
+            report: reportUpload,
           });
           current.failed = false;
           if (!live()) break;

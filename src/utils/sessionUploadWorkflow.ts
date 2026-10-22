@@ -11,7 +11,7 @@ export interface UploadCheckpoint {
 }
 export interface UploadDiagnostic {
   clipId: string;
-  phase: UploadPhase;
+  phase: UploadPhase | 'file-probe' | 'file-copy';
   attempt: number;
   code: string;
   bytes: number;
